@@ -1,0 +1,364 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "ws_update",
+  "title": "WSUpdate",
+  "description": "Go supervisor → React dashboard WebSocket messages. All messages share the WSUpdate envelope. The 'type' field determines which payload schema to use.",
+  "type": "object",
+  "required": [
+    "type",
+    "event_id",
+    "timestamp",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "event_start",
+        "device_update",
+        "zone_summary",
+        "narrative_update",
+        "error"
+      ],
+      "description": "Message type — React switches on this to parse the payload"
+    },
+    "event_id": {
+      "type": "string",
+      "description": "Disaster event identifier this message belongs to",
+      "example": "EQ-2024-001"
+    },
+    "timestamp": {
+      "type": "integer",
+      "description": "Unix timestamp in milliseconds when Go emitted this message",
+      "example": 1700000000000
+    },
+    "payload": {
+      "description": "Varies by type. See oneOf schemas below.",
+      "oneOf": [
+        {
+          "$ref": "#/definitions/EventStart"
+        },
+        {
+          "$ref": "#/definitions/DeviceUpdate"
+        },
+        {
+          "$ref": "#/definitions/ZoneSummary"
+        },
+        {
+          "$ref": "#/definitions/NarrativeUpdate"
+        },
+        {
+          "$ref": "#/definitions/ErrorUpdate"
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "Coordinates": {
+      "type": "object",
+      "required": [
+        "latitude",
+        "longitude"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "latitude": {
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90
+        },
+        "longitude": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        }
+      }
+    },
+    "EventStart": {
+      "title": "EventStart Payload",
+      "description": "type='event_start' — Disaster detected. React initialises the map and clears prior state.",
+      "type": "object",
+      "required": [
+        "disaster_type",
+        "severity",
+        "epicenter",
+        "radius_km",
+        "tsunami_risk",
+        "aftershock_risk"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "disaster_type": {
+          "type": "string",
+          "enum": [
+            "earthquake",
+            "flood",
+            "heatwave"
+          ]
+        },
+        "severity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10,
+          "example": 6.8
+        },
+        "epicenter": {
+          "$ref": "#/definitions/Coordinates"
+        },
+        "radius_km": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Estimated affected radius — used to draw the impact circle on the map",
+          "example": 50
+        },
+        "tsunami_risk": {
+          "type": "boolean",
+          "description": "Whether coastal tsunami risk is present — dashboard shows warning banner if true"
+        },
+        "aftershock_risk": {
+          "type": "string",
+          "enum": [
+            "LOW",
+            "MEDIUM",
+            "HIGH"
+          ],
+          "description": "Aftershock risk level — displayed to government official on dashboard"
+        }
+      }
+    },
+    "DeviceUpdate": {
+      "title": "DeviceUpdate Payload",
+      "description": "type='device_update' — One dot appears or updates on the map. Sent per device as data streams in.",
+      "type": "object",
+      "required": [
+        "phone",
+        "latitude",
+        "longitude",
+        "zone",
+        "reachable",
+        "sms_sent",
+        "rescue_flag"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "phone": {
+          "type": "string",
+          "pattern": "^\\+[1-9]\\d{1,14}$",
+          "description": "E.164 format. Display masked on dashboard (e.g. +212 6** *** 678).",
+          "example": "+212612345678"
+        },
+        "latitude": {
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90
+        },
+        "longitude": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        },
+        "zone": {
+          "type": "string",
+          "enum": [
+            "red",
+            "orange",
+            "green"
+          ],
+          "description": "Controls dot colour on map: red=#FF3B30, orange=#FF9500, green=#34C759"
+        },
+        "reachable": {
+          "type": "boolean",
+          "description": "true if reachability_status is CONNECTED_DATA or CONNECTED_SMS"
+        },
+        "sms_sent": {
+          "type": "boolean",
+          "description": "true if Go successfully dispatched an SMS for this device"
+        },
+        "rescue_flag": {
+          "type": "boolean",
+          "description": "true if AI flagged this device for rescue dispatch"
+        }
+      }
+    },
+    "ZoneSummary": {
+      "title": "ZoneSummary Payload",
+      "description": "type='zone_summary' — Sidebar counters update. Sent after each zone batch completes processing.",
+      "type": "object",
+      "required": [
+        "red_total",
+        "red_reachable",
+        "red_rescue",
+        "orange_total",
+        "orange_reachable",
+        "green_total",
+        "green_reachable"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "red_total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total devices in red zone"
+        },
+        "red_reachable": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Reachable devices in red zone"
+        },
+        "red_rescue": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Devices flagged for rescue in red zone"
+        },
+        "orange_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "orange_reachable": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "green_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "green_reachable": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "NarrativeUpdate": {
+      "title": "NarrativeUpdate Payload",
+      "description": "type='narrative_update' — AI situation report text displayed to government official. Replaces previous narrative for the same zone.",
+      "type": "object",
+      "required": [
+        "zone",
+        "narrative"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "zone": {
+          "type": "string",
+          "enum": [
+            "red",
+            "orange",
+            "green"
+          ],
+          "description": "Which zone this narrative covers"
+        },
+        "narrative": {
+          "type": "string",
+          "description": "AI-generated plain-text situation report. No PII. Max ~500 chars for dashboard display.",
+          "minLength": 1,
+          "example": "Red zone: 12 devices within 5km of epicenter. 9 reachable via SMS — evacuation messages sent. 3 unreachable — rescue teams dispatched. Network congestion HIGH, QoS boost active."
+        }
+      }
+    },
+    "ErrorUpdate": {
+      "title": "ErrorUpdate Payload",
+      "description": "type='error' — Something failed. Dashboard shows warning to government official.",
+      "type": "object",
+      "required": [
+        "code",
+        "message",
+        "phone",
+        "fatal"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "CAMARA_TIMEOUT",
+            "AGENT_ERROR",
+            "SMS_FAILED",
+            "DB_ERROR",
+            "QOS_FAILED"
+          ],
+          "description": "Machine-readable error code"
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable error description for dashboard display",
+          "example": "CAMARA Location API timeout after 5s for device +212612345678"
+        },
+        "phone": {
+          "type": "string",
+          "description": "E.164 phone if error is device-specific, empty string otherwise",
+          "example": "+212612345678"
+        },
+        "fatal": {
+          "type": "boolean",
+          "description": "true = pipeline stopped and cannot continue. Dashboard should show critical alert."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "event_start": {
+        "type": "event_start",
+        "event_id": "EQ-2024-001",
+        "timestamp": 1700000000000,
+        "payload": {
+            "disaster_type": "earthquake",
+            "severity": 6.8,
+            "epicenter": { "latitude": 33.9716, "longitude": -6.8498 },
+            "radius_km": 50.0,
+            "tsunami_risk": false,
+            "aftershock_risk": "HIGH"
+        }
+      },
+      "device_update": {
+        "type": "device_update",
+        "event_id": "EQ-2024-001",
+        "timestamp": 1700000005000,
+        "payload": {
+            "phone": "+212612345678",
+            "latitude": 33.9716,
+            "longitude": -6.8498,
+            "zone": "red",
+            "reachable": true,
+            "sms_sent": true,
+            "rescue_flag": false
+        }
+      },
+      "zone_summary": {
+        "type": "zone_summary",
+        "event_id": "EQ-2024-001",
+        "timestamp": 1700000010000,
+        "payload": {
+            "red_total": 12,
+            "red_reachable": 9,
+            "red_rescue": 3,
+            "orange_total": 47,
+            "orange_reachable": 38,
+            "green_total": 203,
+            "green_reachable": 198
+        }
+      },
+      "narrative_update": {
+        "type": "narrative_update",
+        "event_id": "EQ-2024-001",
+        "timestamp": 1700000012000,
+        "payload": {
+            "zone": "red",
+            "narrative": "Red zone: 12 devices within 5km of epicenter. 9 reachable via SMS — evacuation messages sent. 3 unreachable — rescue teams dispatched. Network congestion HIGH, QoS boost active."
+        }
+      },
+      "error": {
+        "type": "error",
+        "event_id": "EQ-2024-001",
+        "timestamp": 1700000007000,
+        "payload": {
+            "code": "SMS_FAILED",
+            "message": "SMS delivery failed for device after 3 retries",
+            "phone": "+212698765432",
+            "fatal": false
+        }
+      }
+    }
+  ]
+}

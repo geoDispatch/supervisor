@@ -1,0 +1,233 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "camara_device",
+  "title": "CAMARADevice",
+  "description": "Nokia NaC CAMARA API response shapes for Location, Reachability, Verification, and Congestion. These are raw responses preserved exactly as returned by the network APIs before Go processing.",
+  "definitions": {
+    "Coordinates": {
+      "type": "object",
+      "required": ["latitude", "longitude"],
+      "additionalProperties": false,
+      "properties": {
+        "latitude": {
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90
+        },
+        "longitude": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        }
+      }
+    },
+    "CAMARALocationArea": {
+      "type": "object",
+      "required": ["areaType", "center", "radius"],
+      "additionalProperties": false,
+      "properties": {
+        "areaType": {
+          "type": "string",
+          "enum": ["CIRCLE"],
+          "description": "Always CIRCLE in Nokia NaC"
+        },
+        "center": {
+          "$ref": "#/definitions/Coordinates"
+        },
+        "radius": {
+          "type": "number",
+          "description": "Location accuracy radius in metres (~500m urban)",
+          "minimum": 0,
+          "example": 500
+        }
+      }
+    },
+    "CAMARALocationResponse": {
+      "title": "Location Retrieval API Response",
+      "description": "Nokia NaC Location Retrieval API response",
+      "type": "object",
+      "required": ["lastLocationTime", "area"],
+      "additionalProperties": false,
+      "properties": {
+        "lastLocationTime": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO8601 timestamp of last known location",
+          "example": "2024-11-14T10:30:00Z"
+        },
+        "area": {
+          "$ref": "#/definitions/CAMARALocationArea"
+        }
+      }
+    },
+    "CAMARAReachabilityResponse": {
+      "title": "Device Reachability API Response",
+      "description": "Nokia NaC Device Reachability status",
+      "type": "object",
+      "required": ["lastStatusTime", "reachabilityStatus"],
+      "additionalProperties": false,
+      "properties": {
+        "lastStatusTime": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO8601 timestamp of last reachability check",
+          "example": "2024-11-14T10:29:45Z"
+        },
+        "reachabilityStatus": {
+          "type": "string",
+          "enum": ["CONNECTED_DATA", "CONNECTED_SMS", "NOT_CONNECTED"],
+          "description": "Exact Nokia NaC reachability values"
+        }
+      }
+    },
+    "CAMARAVerificationResponse": {
+      "title": "Location Verification API Response",
+      "description": "Nokia NaC Location Verification result",
+      "type": "object",
+      "required": ["verificationResult", "lastLocationTime"],
+      "additionalProperties": false,
+      "properties": {
+        "verificationResult": {
+          "type": "string",
+          "enum": ["TRUE", "FALSE", "PARTIAL", "UNKNOWN"],
+          "description": "Whether device is within the verified area"
+        },
+        "matchRate": {
+          "type": "integer",
+          "description": "Match confidence 0-100, only present when verificationResult is PARTIAL",
+          "minimum": 0,
+          "maximum": 100,
+          "example": 72
+        },
+        "lastLocationTime": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO8601 timestamp",
+          "example": "2024-11-14T10:30:00Z"
+        }
+      }
+    },
+    "CAMARACongestionResponse": {
+      "title": "Congestion Insights API Response",
+      "description": "Nokia NaC network congestion level in the disaster area",
+      "type": "object",
+      "required": ["level", "timestamp"],
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+          "description": "Network congestion level"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO8601 timestamp of congestion reading",
+          "example": "2024-11-14T10:30:00Z"
+        }
+      }
+    },
+    "TriagedDevice": {
+      "title": "TriagedDevice",
+      "description": "Processed device after Go applies CAMARA data + haversine zone calculation. Zone is ALWAYS set by Go, never by AI or CAMARA.",
+      "type": "object",
+      "required": [
+        "phone",
+        "latitude",
+        "longitude",
+        "location_radius_m",
+        "last_location_time",
+        "reachability_status",
+        "last_status_time",
+        "zone",
+        "distance_km"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "phone": {
+          "type": "string",
+          "pattern": "^\\+[1-9]\\d{1,14}$",
+          "description": "E.164 phone number",
+          "example": "+212612345678"
+        },
+        "latitude": {
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90
+        },
+        "longitude": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        },
+        "location_radius_m": {
+          "type": "number",
+          "description": "CAMARA location accuracy in metres",
+          "minimum": 0,
+          "example": 500
+        },
+        "last_location_time": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO8601 — preserved raw from CAMARA"
+        },
+        "reachability_status": {
+          "type": "string",
+          "enum": ["CONNECTED_DATA", "CONNECTED_SMS", "NOT_CONNECTED"]
+        },
+        "last_status_time": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO8601 — preserved raw from CAMARA"
+        },
+        "zone": {
+          "type": "string",
+          "enum": ["red", "orange", "green"],
+          "description": "Danger zone calculated by Go haversine — NEVER set by AI"
+        },
+        "distance_km": {
+          "type": "number",
+          "description": "Haversine distance from epicenter in km",
+          "minimum": 0,
+          "example": 3.7
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "location_response": {
+      "lastLocationTime": "2024-11-14T10:30:00Z",
+      "area": {
+          "areaType": "CIRCLE",
+          "center": { "latitude": 33.9716, "longitude": -6.8498 },
+          "radius": 500
+        }
+      },
+      "reachability_response": {
+        "lastStatusTime": "2024-11-14T10:29:45Z",
+        "reachabilityStatus": "CONNECTED_SMS"
+      },
+      "verification_response": {
+        "verificationResult": "PARTIAL",
+        "matchRate": 72,
+        "lastLocationTime": "2024-11-14T10:30:00Z"
+      },
+      "congestion_response": {
+        "level": "HIGH",
+        "timestamp": "2024-11-14T10:30:00Z"
+      },
+      "triaged_device": {
+        "phone": "+212612345678",
+        "latitude": 33.9716,
+        "longitude": -6.8498,
+        "location_radius_m": 500,
+        "last_location_time": "2024-11-14T10:30:00Z",
+        "reachability_status": "CONNECTED_SMS",
+        "last_status_time": "2024-11-14T10:29:45Z",
+        "zone": "red",
+        "distance_km": 3.7
+      }
+    }
+   ]
+}

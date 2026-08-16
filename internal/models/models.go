@@ -16,8 +16,8 @@ type Coordinates struct {
 type DisasterType string
 const (
 	Earthquake DisasterType = "earthquake"
-	Flood      DisasterType = "flood"
-	Heatwave   DisasterType = "heatwave"
+	Flood      DisasterType = "flood" 			// to be implemented later
+	Heatwave   DisasterType = "heatwave"		// to be implemented later
 )
 
 // ── Zone types ────────────────────────────────────────────────
@@ -195,6 +195,7 @@ type AgentRequest struct {
 	DisasterType   DisasterType `json:"disaster_type"`
 	Severity       float64      `json:"severity"`
 	AftershockRisk string       `json:"aftershock_risk"`
+	TsunamiRisk    bool         `json:"tsunami_risk"`
 
 	// Devices in this batch (one zone only per request)
 	Zone       ZoneType        `json:"zone"`        // which zone this batch is
@@ -202,7 +203,7 @@ type AgentRequest struct {
 	Devices    []TriagedDevice `json:"devices"`
 
 	// Environment context
-	NearestShelter 	Shelter       `json:"nearest_shelter"`
+	NearestShelters []Shelter 	  `json:"nearest_shelters"`
 	NetworkStatus   NetworkStatus `json:"network_status"`
 }
 
@@ -257,10 +258,12 @@ const (
 
 // Payload when Type = "event_start"
 type EventStart struct {
-	DisasterType DisasterType `json:"disaster_type"`
-	Severity     float64      `json:"severity"`
-	Epicenter    Coordinates  `json:"epicenter"`
-	RadiusKm     float64      `json:"radius_km"`
+    DisasterType   DisasterType `json:"disaster_type"`
+    Severity       float64      `json:"severity"`
+    Epicenter      Coordinates  `json:"epicenter"`
+    RadiusKm       float64      `json:"radius_km"`
+    TsunamiRisk    bool         `json:"tsunami_risk"`
+    AftershockRisk string       `json:"aftershock_risk"`
 }
 
 // Payload when Type = "device_update"

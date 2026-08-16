@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "sensor_input",
+  "title": "SensorInput",
+  "description": "Disaster sensor POST payload to Go supervisor. Source: USGS GeoJSON standard (earthquake). Endpoint: POST /sensor",
+  "type": "object",
+  "required": [
+    "event_id",
+    "disaster_type",
+    "timestamp",
+    "severity",
+    "epicenter",
+    "radius_km",
+    "depth_km",
+    "aftershock_risk",
+    "tsunami_risk"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Unique disaster event identifier",
+      "example": "EQ-2024-001"
+    },
+    "disaster_type": {
+      "type": "string",
+      "enum": ["earthquake", "flood", "heatwave"],
+      "description": "Type of disaster detected"
+    },
+    "timestamp": {
+      "type": "integer",
+      "description": "Unix timestamp in milliseconds",
+      "example": 1700000000000
+    },
+    "severity": {
+      "type": "number",
+      "description": "Richter magnitude for earthquakes",
+      "minimum": 0,
+      "maximum": 10,
+      "example": 6.8
+    },
+    "epicenter": {
+      "$ref": "#/definitions/Coordinates"
+    },
+    "radius_km": {
+      "type": "number",
+      "description": "Estimated affected radius in kilometres",
+      "minimum": 0,
+      "example": 50.0
+    },
+    "depth_km": {
+      "type": "number",
+      "description": "Earthquake depth in km (0 for non-seismic disasters)",
+      "minimum": 0,
+      "example": 10.0
+    },
+    "aftershock_risk": {
+      "type": "string",
+      "enum": ["LOW", "MEDIUM", "HIGH"],
+      "description": "Estimated aftershock risk level"
+    },
+    "tsunami_risk": {
+      "type": "boolean",
+      "description": "Whether coastal tsunami risk is present (earthquake only)"
+    }
+  },
+  "definitions": {
+    "Coordinates": {
+      "type": "object",
+      "required": ["latitude", "longitude"],
+      "additionalProperties": false,
+      "properties": {
+        "latitude": {
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90,
+          "example": 33.9716
+        },
+        "longitude": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180,
+          "example": -6.8498
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "event_id": "EQ-2024-001",
+      "disaster_type": "earthquake",
+      "timestamp": 1700000000000,
+      "severity": 6.8,
+      "epicenter": {
+        "latitude": 33.9716,
+        "longitude": -6.8498
+      },
+      "radius_km": 50.0,
+      "depth_km": 10.0,
+      "aftershock_risk": "HIGH",
+      "tsunami_risk": false
+    }
+  ]
+}
