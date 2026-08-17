@@ -65,13 +65,66 @@
       - Removed root-level starter `README.md` / `LICENSE` in favor of docs-oriented layout
 
 
+────────────────────────────────────────────────────────────────
+  v0.2.0 => v0.3.0                                      [MAJOR]
+────────────────────────────────────────────────────────────────
+  + Full mock-driven testing environment introduced
+      - Added `.env.example` tailored for local simulation
+      - Added dedicated mock service ports and defaults:
+          MOCK_CAMARA_PORT=8081
+          MOCK_AGENT_PORT=5000
+          DATABASE_URL=mock
+  + Added end-to-end local simulation stack
+      - Added `scripts/mock_camara.go` with deterministic location/reachability/QoS responses
+      - Added `scripts/mock_agent.go` with zone-based AI decision simulation
+      - Added `cmd/testing/main.go` as a full pipeline test harness with rich console telemetry
+      - Removed obsolete `scripts/mock_server.go`
+  + Pipeline dispatch stage materially expanded in supervisor runtime
+      - Added parallel per-decision execution for:
+          SMS dispatch
+          rescue flagging
+          websocket updates
+      - Added post-AI batch processing with:
+          zone summary aggregation
+          narrative broadcast
+          optional QoS upgrade trigger
+      - Added final event completion logging and timing output
+  + Zone processing primitives implemented
+      - Added `internal/zones/heap.go` for distance-priority batching
+      - Implemented `internal/zones/haversine.go` for epicenter distance math
+      - Implemented `internal/zones/assign.go` for red/orange/green zone assignment
+  + Core package implementations landed (from stubs to executable logic)
+      - `internal/agent/client.go` now performs real HTTP JSON decision calls
+      - `internal/camara/client.go` now performs location/reachability/QoS requests
+      - `internal/dashboard/hub.go` now provides live websocket connection + broadcast wrappers
+      - `internal/sensor/handler.go` now parses incoming sensor payloads
+      - `internal/database/postgres.go` now supports safe mock-mode DB initialization
+      - `internal/dispatch/sms.go` now provides compile-safe SMS/rescue dispatch stubs
+  + Model and contract evolution
+      - Updated `contracts/ai_request.json`:
+          `nearest_shelter` → `nearest_shelters` (array, up to 3)
+      - Updated internal models with stronger typed enums:
+          `AftershockRisk` type introduced
+          `ErrorCode` constants introduced (CAMARA_TIMEOUT / AGENT_ERROR / SMS_FAILED / DB_ERROR / QOS_FAILED)
+      - Extended `DeviceDecision` with `shelter_name`
+  + Documentation and compliance improvements
+      - Added structured `docs/CHANGELOGS.md`
+      - Significantly expanded `docs/ERRORDOCS.md` with error taxonomy and handling policy
+      - Added MIT license file under `docs/LICENSE`
+      - Added testing illustration asset: `docs/imgs/testing_prototype.jpeg`
+  · Configuration profile simplified for local-first development
+      - Refactored `config/config.go` to default to mock-friendly values
+      - Reduced strict env requirements to streamline test bootstrapping
+  · Dependency updates
+      - Added `github.com/gorilla/websocket v1.5.3` to support dashboard realtime channel
+
 ════════════════════════════════════════════════════════════════
                         CURRENT RELEASE
 ════════════════════════════════════════════════════════════════
 
   BUILD STATUS:     ⚠️ FOUNDATION PHASE (SKELETON IN PLACE)
-  VERSION:          v0.2.0
-  RELEASE DATE:     August 16, 2026
+  VERSION:          v0.3.0
+  RELEASE DATE:     August 17, 2026
   FOCUS:            Pipeline orchestration, contracts, and infra scaffolding
 
 ════════════════════════════════════════════════════════════════
