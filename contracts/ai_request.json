@@ -13,7 +13,7 @@
     "zone",
     "batch_index",
     "devices",
-    "nearest_shelter",
+    "nearest_shelters",
     "network_status"
   ],
   "additionalProperties": false,
@@ -59,8 +59,14 @@
         "$ref": "#/definitions/TriagedDevice"
       }
     },
-    "nearest_shelter": {
-      "$ref": "#/definitions/Shelter"
+    "nearest_shelters": {
+      "type": "array",
+      "description": "Up to 3 nearest shelters sorted by distance_km ascending. AI must pick the best one per device based on distance and remaining capacity.",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "$ref": "#/definitions/Shelter"
+      }
     },
     "network_status": {
       "$ref": "#/definitions/NetworkStatus"
@@ -165,13 +171,29 @@
           "distance_km": 3.7
         }
       ],
-      "nearest_shelter": {
-        "name": "École Ibn Battouta",
-        "address": "Rue 14, Hay Riad, Rabat",
-        "location": { "latitude": 33.9800, "longitude": -6.8600 },
-        "distance_km": 1.2,
-        "capacity": 300
-      },
+      "nearest_shelters": [
+        {
+          "name": "École Ibn Battouta",
+          "address": "Rue 14, Hay Riad, Rabat",
+          "location": { "latitude": 33.9800, "longitude": -6.8600 },
+          "distance_km": 1.2,
+          "capacity": 300
+        },
+        {
+          "name": "Salle Omnisports Hay Riad",
+          "address": "Av. Al Majd, Hay Riad, Rabat",
+          "location": { "latitude": 33.9750, "longitude": -6.8550 },
+          "distance_km": 2.1,
+          "capacity": 800
+        },
+        {
+          "name": "Lycée Technique Rabat",
+          "address": "Rue Patrice Lumumba, Rabat",
+          "location": { "latitude": 33.9850, "longitude": -6.8700 },
+          "distance_km": 3.4,
+          "capacity": 500
+        }
+      ],
       "network_status": {
         "congestion_level": "HIGH",
         "sms_delivery_rate": 0.72,

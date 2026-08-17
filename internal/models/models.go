@@ -68,14 +68,13 @@ const (
 	NotConnected  ReachabilityStatus = "NOT_CONNECTED"
 )
 
-// ── Verification result (CAMARA Location Verification API) ───
+// ── AftershockRisk status  ────────────────────────────────────
 
-type VerificationResult string
+type AftershockRisk string
 const (
-	VerificationTrue    VerificationResult = "TRUE"
-	VerificationFalse   VerificationResult = "FALSE"
-	VerificationPartial VerificationResult = "PARTIAL"
-	VerificationUnknown VerificationResult = "UNKNOWN"
+    AftershockLow    AftershockRisk = "LOW"
+    AftershockMedium AftershockRisk = "MEDIUM"
+    AftershockHigh   AftershockRisk = "HIGH"
 )
 
 // ─────────────────────────────────────────────────────────────
@@ -86,15 +85,15 @@ const (
 // ─────────────────────────────────────────────────────────────
 
 type SensorInput struct {
-	EventID        string       `json:"event_id"`
-	DisasterType   DisasterType `json:"disaster_type"`
-	Timestamp      int64        `json:"timestamp"`       // Unix ms
-	Severity       float64      `json:"severity"`        // Richter for quake
-	Epicenter      Coordinates  `json:"epicenter"`
-	RadiusKm       float64      `json:"radius_km"`       // estimated affected radius
-	DepthKm        float64      `json:"depth_km"`        // earthquake depth (0 for others)
-	AftershockRisk string       `json:"aftershock_risk"` // "LOW"|"MEDIUM"|"HIGH"
-	TsunamiRisk    bool         `json:"tsunami_risk"`    // earthquake coastal events
+	EventID        string       	`json:"event_id"`
+	DisasterType   DisasterType 	`json:"disaster_type"`
+	Timestamp      int64        	`json:"timestamp"`       // Unix ms
+	Severity       float64      	`json:"severity"`        // Richter for quake
+	Epicenter      Coordinates  	`json:"epicenter"`
+	RadiusKm       float64      	`json:"radius_km"`       // estimated affected radius
+	DepthKm        float64      	`json:"depth_km"`        // earthquake depth (0 for others)
+	AftershockRisk AftershockRisk   `json:"aftershock_risk"`
+	TsunamiRisk    bool         	`json:"tsunami_risk"`    // earthquake coastal events
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -118,13 +117,6 @@ type CAMARALocationResponse struct {
 type CAMARAReachabilityResponse struct {
 	LastStatusTime     string             `json:"lastStatusTime"`
 	ReachabilityStatus ReachabilityStatus `json:"reachabilityStatus"`
-}
-
-// Location Verification API response
-type CAMARAVerificationResponse struct {
-	VerificationResult VerificationResult `json:"verificationResult"`
-	MatchRate          int                `json:"matchRate,omitempty"` // 0-100, only when PARTIAL
-	LastLocationTime   string             `json:"lastLocationTime"`
 }
 
 // Congestion Insights API response
@@ -191,11 +183,11 @@ type NetworkStatus struct {
 // ─────────────────────────────────────────────────────────────
 
 type AgentRequest struct {
-	EventID        string       `json:"event_id"`
-	DisasterType   DisasterType `json:"disaster_type"`
-	Severity       float64      `json:"severity"`
-	AftershockRisk string       `json:"aftershock_risk"`
-	TsunamiRisk    bool         `json:"tsunami_risk"`
+	EventID        string       	`json:"event_id"`
+	DisasterType   DisasterType 	`json:"disaster_type"`
+	Severity       float64      	`json:"severity"`
+	AftershockRisk AftershockRisk   `json:"aftershock_risk"`
+	TsunamiRisk    bool         	`json:"tsunami_risk"`
 
 	// Devices in this batch (one zone only per request)
 	Zone       ZoneType        `json:"zone"`        // which zone this batch is
@@ -213,33 +205,34 @@ type AgentRequest struct {
 // Go acts on this immediately — dispatch + dashboard update
 // ─────────────────────────────────────────────────────────────
 
-type AgentResponse struct {
-	EventID      string           `json:"event_id"`
-	Zone         ZoneType         `json:"zone"`
-	Decisions    []DeviceDecision `json:"decisions"`
-	GovNarrative string           `json:"gov_narrative"` // situation report for dashboard
-	RequestQoS   bool             `json:"request_qos"`
-	Confidence   float64          `json:"confidence"` // 0.0-1.0
+type DeviceDecision struct {
+    Phone          string     `json:"phone"`
+    ZoneConfirmed  ZoneType   `json:"zone_confirmed"`
+    ZoneEscalated  bool       `json:"zone_escalated"`
+    Action         ActionType `json:"action"`
+    SMSMessage     string     `json:"sms_message"`
+    ShelterName    string     `json:"shelter_name"`
+    RescuePriority int        `json:"rescue_priority"`
+    Confidence     float64    `json:"confidence"`
+    Reasoning      string     `json:"reasoning"`
 }
 
-type DeviceDecision struct {
-	Phone         string     `json:"phone"`
-	ZoneConfirmed ZoneType   `json:"zone_confirmed"`  // AI confirms or escalates
-	ZoneEscalated bool       `json:"zone_escalated"`  // true if AI upgraded Go's zone
-	Action        ActionType `json:"action"`          // "sms"|"rescue_flag"|"both"|"none"
-	SMSMessage    string     `json:"sms_message"`     // exact text — empty if rescue only
-	RescuePriority int       `json:"rescue_priority"` // 1=highest, 0=not flagged
-	Confidence    float64    `json:"confidence"`      // per-device confidence
-	Reasoning     string     `json:"reasoning"`       // internal logs only — never show to end user
+type AgentResponse struct {
+    EventID      string           `json:"event_id"`
+    Zone         ZoneType         `json:"zone"`
+    Decisions    []DeviceDecision `json:"decisions"`
+    GovNarrative string           `json:"gov_narrative"`
+    RequestQoS   bool             `json:"request_qos"`
+    Confidence   float64          `json:"confidence"`
 }
 
 // ─────────────────────────────────────────────────────────────
 // WEBSOCKET MESSAGES
-// Go supervisor → React dashboard
+// Go supervisor → dashboard
 // ─────────────────────────────────────────────────────────────
 
 // WSUpdate is the envelope for all WebSocket messages
-// Type field tells React which payload struct to expect
+// Type field tells which payload struct to expect
 type WSUpdate struct {
 	Type      string          `json:"type"`      // see WSType constants below
 	EventID   string          `json:"event_id"`
@@ -247,7 +240,7 @@ type WSUpdate struct {
 	Payload   json.RawMessage `json:"payload"`   // deferred parsing based on Type
 }
 
-// WSType constants — what React switches on
+// WSType constants — what switches on
 const (
 	WSTypeEventStart      = "event_start"      // disaster detected, map initialises
 	WSTypeDeviceUpdate    = "device_update"     // one dot appears/updates on map
@@ -258,12 +251,12 @@ const (
 
 // Payload when Type = "event_start"
 type EventStart struct {
-    DisasterType   DisasterType `json:"disaster_type"`
-    Severity       float64      `json:"severity"`
-    Epicenter      Coordinates  `json:"epicenter"`
-    RadiusKm       float64      `json:"radius_km"`
-    TsunamiRisk    bool         `json:"tsunami_risk"`
-    AftershockRisk string       `json:"aftershock_risk"`
+    DisasterType   DisasterType 	`json:"disaster_type"`
+    Severity       float64      	`json:"severity"`
+    Epicenter      Coordinates  	`json:"epicenter"`
+    RadiusKm       float64      	`json:"radius_km"`
+    TsunamiRisk    bool         	`json:"tsunami_risk"`
+    AftershockRisk AftershockRisk 	`json:"aftershock_risk"`
 }
 
 // Payload when Type = "device_update"
@@ -292,9 +285,18 @@ type ZoneSummary struct {
 
 // Payload when Type = "error"
 // Something failed — dashboard shows warning to gov official
+type ErrorCode string
+const (
+    ErrCAMARATimeout ErrorCode = "CAMARA_TIMEOUT"
+    ErrAgentError    ErrorCode = "AGENT_ERROR"
+    ErrSMSFailed     ErrorCode = "SMS_FAILED"
+    ErrDBError       ErrorCode = "DB_ERROR"
+    ErrQoSFailed     ErrorCode = "QOS_FAILED"
+)
+
 type ErrorUpdate struct {
-	Code    string `json:"code"`    // "CAMARA_TIMEOUT"|"AGENT_ERROR"|"SMS_FAILED"
-	Message string `json:"message"`
-	Phone   string `json:"phone"`   // empty if not device-specific
-	Fatal   bool   `json:"fatal"`   // true = pipeline stopped
+    Code    ErrorCode `json:"code"`
+    Message string    `json:"message"`
+    Phone   string    `json:"phone"`
+    Fatal   bool      `json:"fatal"`
 }

@@ -202,7 +202,7 @@ func runPipeline(
 	for _, phone := range phones {
 		wgDevices.Add(1)
 		sem <- struct{}{} // acquire slot
-
+onstruc
 		go func(p string) {
 			defer wgDevices.Done()
 			defer func() { <-sem }() // release slot
@@ -302,16 +302,16 @@ func runPipeline(
 			ms(tBoot), batchIdx, len(batch))
 
 		req := models.AgentRequest{
-			EventID:        input.EventID,
-			DisasterType:   input.DisasterType,
-			Severity:       input.Severity,
-			AftershockRisk: input.AftershockRisk,
-			TsunamiRisk:    input.TsunamiRisk,
-			Zone:           batch[0].Zone,
-			BatchIndex:     batchIdx,
-			Devices:        batch,
-			NearestShelter: shelter,
-			NetworkStatus:  networkStatus,
+			EventID:        	input.EventID,
+			DisasterType:   	input.DisasterType,
+			Severity:       	input.Severity,
+			AftershockRisk: 	input.AftershockRisk,
+			TsunamiRisk:    	input.TsunamiRisk,
+			Zone:           	batch[0].Zone,
+			BatchIndex:     	batchIdx,
+			Devices:        	batch,
+			NearestShelters: 	nearestShelters,
+			NetworkStatus:  	networkStatus,
 		}
 
 		resp, err := agentClient.Decide(ctx, req)
@@ -319,7 +319,7 @@ func runPipeline(
 			log.Printf("[T+%dms] AI agent error batch %d: %v", ms(tBoot), batchIdx, err)
 			
 			hub.BroadcastError(models.ErrorUpdate{
-				Code:    "AGENT_ERROR",
+				Code:    models.ErrSMSFailed,
 				Message: err.Error(),
 				Fatal:   false,
 			}, input.EventID)
@@ -331,8 +331,88 @@ func runPipeline(
 		log.Printf("[T+%dms] AI response batch %d received in %dms — confidence=%.2f",
 			ms(tBoot), batchIdx, ms(tBatch), resp.Confidence)
 
-		// Receive the batch's decision
-		// Apply the decision (sms, rescue, both, none)
-		// Modify the device state by ws
+		// ── Dispatch: SMS + rescue + WS push — all in parallel per batch ─────
+		var wgDispatch sync.WaitGroup
+ 
+		for _, decision := range resp.Decisions {
+			wgDispatch.Add(1)
+			go func(d models.DeviceDecision) {
+				defer wgDispatch.Done()
+ 
+				// SMS
+				if d.Action == models.ActionSMS || d.Action == models.ActionBoth {
+					if err := dispatch.SendSMS(ctx, cfg, d.Phone, d.SMSMessage); err != nil {
+						log.Printf("[T+%dms] SMS failed phone=%s: %v", ms(tBoot), d.Phone, err)
+						hub.BroadcastError(models.ErrorUpdate{
+							Code:    models.ErrSMSFailed,
+							Message: err.Error(),
+							Phone:   d.Phone,
+							Fatal:   false,
+						}, input.EventID)
+					} else {
+						log.Printf("[T+%dms] SMS sent phone=%s", ms(tBoot), d.Phone)
+					}
+				}
+ 
+				// Rescue flag
+				if d.Action == models.ActionRescue || d.Action == models.ActionBoth {
+					if err := dispatch.FlagRescue(ctx, db, d, input.EventID); err != nil {
+						log.Printf("[T+%dms] rescue flag failed phone=%s: %v", ms(tBoot), d.Phone, err)
+					} else {
+						log.Printf("[T+%dms] rescue flagged phone=%s priority=%d", ms(tBoot), d.Phone, d.RescuePriority)
+					}
+				}
+ 
+				// WS device update (with SMS/rescue status now known)
+				hub.BroadcastDeviceUpdate(models.DeviceUpdate{
+					Phone:      d.Phone,
+					Zone:       d.ZoneConfirmed,
+					SMSSent:    d.Action == models.ActionSMS || d.Action == models.ActionBoth,
+					RescueFlag: d.Action == models.ActionRescue || d.Action == models.ActionBoth,
+				}, input.EventID)
+ 
+				// Update zone summary counters
+				updateZoneSummary(&zoneSummary, d)
+			}(decision)
+		}
+ 
+		wgDispatch.Wait()
+ 
+		// QoS upgrade if AI requested it
+		if resp.RequestQoS {
+			log.Printf("[T+%dms] AI requested QoS upgrade for zone=%s", ms(tBoot), resp.Zone)
+			go camara.UpgradeQoS(ctx, cfg, input.Epicenter)
+		}
+ 
+		// Push zone summary + narrative after each batch
+		hub.BroadcastZoneSummary(zoneSummary, input.EventID)
+		hub.BroadcastNarrative(resp.Zone, resp.GovNarrative, input.EventID)
+ 
+		log.Printf("[T+%dms] batch %d fully dispatched in %dms",
+			ms(tBoot), batchIdx, ms(tBatch))
+ 
+		batchIdx++
+	}
+ 
+	log.Printf("[T+%dms] pipeline complete — event_id=%s total=%dms",
+		ms(tBoot), input.EventID, ms(tEvent))
+}
 
+// updateZoneSummary mutates the running zone counters after each device decision.
+func updateZoneSummary(s *models.ZoneSummary, d models.DeviceDecision) {
+    reachable := d.Action == models.ActionSMS || d.Action == models.ActionBoth
+    rescue    := d.Action == models.ActionRescue || d.Action == models.ActionBoth
+
+    switch d.ZoneConfirmed {
+    case models.ZoneRed:
+        s.RedTotal++
+        if reachable { s.RedReachable++ }
+        if rescue    { s.RedRescue++ }    // rescue only meaningful in red
+    case models.ZoneOrange:
+        s.OrangeTotal++
+        if reachable { s.OrangeReachable++ }
+    case models.ZoneGreen:
+        s.GreenTotal++
+        if reachable { s.GreenReachable++ }
+    }
 }
