@@ -8,91 +8,100 @@ This is only the Go-Supervisor server-side part, Other parts will be coded elsew
 
 ## How it works
 
-```
+```text
 Disaster sensor
       ↓
 Go Supervisor — fetches CAMARA APIs in parallel (50 concurrent goroutines)
       ↓
 Zone assignment — haversine math in Go, never in AI
       ↓
-Python AI Agent (Ollama, local) — decides action + crafts SMS per zone batch
+Python AI Agent — decides action + crafts SMS per zone batch
       ↓
-Go Supervisor — fires SMS in parallel + streams to gov dashboard via WebSocket
+Go Supervisor — fires SMS/rescue in parallel + streams to gov dashboard via WebSocket
 ```
 
 ---
 
 ## Project structure
 
-```
+```text
 geodispatch/
 ├── cmd/
-│   └── supervisor/
-│       └── main.go                  ← entry point, boots everything
+│   ├── supervisor/
+│   │   └── main.go                  ← production supervisor runtime
+│   └── testing/
+│       └── main.go                  ← local simulation runtime (mock-first)
 │
 ├── internal/
 │   ├── models/
 │   │   └── models.go                ← all shared structs + constants (contracts)
 │   │
 │   ├── camara/
-│   │   ├── client.go                ← Nokia NaC HTTP client + auth
-│   │   ├── location.go              ← Location Retrieval API
-│   │   ├── reachability.go          ← Device Reachability API
-│   │   ├── geofencing.go            ← Geofencing API
-│   │   ├── qos.go                   ← QoS on Demand API
-│   │   ├── congestion.go            ← Congestion Insights API
-│   │   └── batch.go                 ← semaphore, 50 concurrent goroutines
+│   │   ├── client.go                ← Nokia NaC HTTP client + auth hooks
+│   │   ├── location.go              ← Location Retrieval API helpers
+│   │   ├── reachability.go          ← Device Reachability API helpers
+│   │   ├── geofencing.go            ← Geofencing API helpers
+│   │   ├── qos.go                   ← QoS on Demand helpers
+│   │   ├── congestion.go            ← Congestion insights helpers
+│   │   └── batch.go                 ← CAMARA batch/concurrency orchestration
 │   │
 │   ├── zones/
 │   │   ├── haversine.go             ← distance calculation
-│   │   └── assign.go                ← red/orange/green assignment logic
+│   │   ├── assign.go                ← red/orange/green assignment logic
+│   │   └── heap.go                  ← distance-priority batching
 │   │
 │   ├── agent/
 │   │   ├── client.go                ← HTTP client that calls Python agent
-│   │   └── prompt.go                ← builds AgentRequest per zone batch
+│   │   └── prompt.go                ← Agent request shaping
 │   │
 │   ├── dispatch/
-│   │   ├── sms.go                   ← Africa's Talking / Twilio SMS sender
+│   │   ├── sms.go                   ← SMS sender (stub/mock-safe, gateway-ready)
 │   │   ├── rescue.go                ← rescue flag logger + dashboard push
 │   │   └── worker.go                ← goroutine pool for parallel dispatch
 │   │
 │   ├── dashboard/
-│   │   ├── server.go                ← WebSocket server (gorilla/websocket)
-│   │   ├── hub.go                   ← manages connected clients
-│   │   └── broadcast.go             ← pushes WSUpdate to all clients
+│   │   ├── server.go                ← websocket server wrappers
+│   │   ├── hub.go                   ← connected-client hub + broadcasting
+│   │   └── broadcast.go             ← WSUpdate emit helpers
 │   │
 │   ├── database/
-│   │   ├── postgres.go              ← connection pool setup
-│   │   ├── shelters.go              ← PostGIS nearest shelter query
+│   │   ├── postgres.go              ← DB connector (mock mode supported)
+│   │   ├── shelters.go              ← nearest shelter query hooks
 │   │   └── logs.go                  ← alert logs, event history
 │   │
 │   └── sensor/
-│       └── handler.go               ← HTTP handler for incoming sensor POST
+│       └── handler.go               ← HTTP parser for incoming sensor POST
 │
 ├── contracts/
 │   ├── README.md                    ← contract rules for all team members
-│   ├── sensor_input.json            ← example sensor payload
-│   ├── camara_device.json           ← example CAMARA device data
-│   ├── ai_request.json              ← example Go → Python payload
-│   ├── ai_response.json             ← example Python → Go payload
-│   └── ws_update.json               ← example WebSocket message
+│   ├── sensor_input.json            ← sensor payload schema
+│   ├── camara_device.json           ← CAMARA response schemas
+│   ├── ai_request.json              ← Go → AI request schema
+│   ├── ai_response.json             ← AI → Go response schema
+│   └── ws_update.json               ← websocket update schema
 │
 ├── scripts/
-│   ├── mock_server.go               ← fake server for team development
-│   ├── simulate_disaster.go         ← sends fake sensor events for testing
-│   └── seed_shelters.sql            ← populates PostGIS with MENA shelter data
+│   ├── mock_camara.go               ← local mock CAMARA server (location/reachability/qos)
+│   ├── mock_agent.go                ← local mock AI decision server
+│   └── simulate_disaster.go         ← sends fake sensor events for testing
 │
 ├── config/
-│   └── config.go                    ← loads .env, exposes typed config struct
+│   └── config.go                    ← loads env and exposes typed config
 │
 ├── docs/
 │   ├── CHANGELOGS.md
+│   ├── ERRORDOCS.md
 │   ├── LICENSE
-│   └── README.md
+│   ├── README.md
+│   └── imgs/
+│       ├── prototype_schema_01.png
+│       ├── testing_prototype.jpeg
+│       └── time_prediction.png
 │
-├── .env.example                     ← template for environment variables
-├── .env                             ← real keys (gitignored)
-└── .gitignore
+├── .env.example                     ← mock-first env template
+├── .gitignore
+├── go.mod
+└── go.sum
 ```
 
 ---
@@ -101,117 +110,179 @@ geodispatch/
 
 | Package | Responsibility |
 |---|---|
-| `cmd/supervisor` | Boots the HTTP server, wires all packages together, nothing else |
-| `internal/models` | Single source of truth for all structs — nobody defines types outside this file |
-| `internal/camara` | One file per CAMARA API — `batch.go` is the semaphore that prevents rate limiting |
-| `internal/zones` | Pure math, no external dependencies, fully unit testable in isolation |
-| `internal/agent` | Knows how to talk to Python and how to build the prompt — nothing else |
-| `internal/dispatch` | Fires SMS and rescue flags — never decides who gets what, only executes |
-| `internal/dashboard` | WebSocket only — no business logic, just pushes what Go tells it to push |
-| `internal/database` | PostGIS queries only — `shelters.go` holds real MENA shelter coordinates |
-| `internal/sensor` | One handler — receives POST from sensor, kicks off the entire pipeline |
-| `contracts/` | JSON examples for every team member — Person 1 and Person 3 build against these |
-| `scripts/` | `simulate_disaster.go` lets Person 5 run end-to-end tests without a real sensor |
-| `config/` | One place for all env vars — everyone imports this instead of calling `os.Getenv` directly |
+| `cmd/supervisor` | Boots the runtime and orchestrates the production pipeline |
+| `cmd/testing` | Runs the same orchestration in local mock mode for rapid validation |
+| `internal/models` | Single source of truth for all contracts, enums, and typed payloads |
+| `internal/camara` | CAMARA API integration layer (location/reachability/qos/geofencing) |
+| `internal/zones` | Pure geo logic + priority ordering (haversine/assign/heap) |
+| `internal/agent` | AI transport and request/response decoding only |
+| `internal/dispatch` | Executes SMS/rescue actions from AI decisions |
+| `internal/dashboard` | WebSocket client hub and dashboard message broadcasting |
+| `internal/database` | DB connectivity + query hooks (mock-safe path available) |
+| `internal/sensor` | Sensor input parsing and request boundary validation |
+| `contracts/` | Locked inter-service schema definitions |
+| `scripts/` | Local simulation stack (mock CAMARA, mock AI, fake sensor events) |
+| `config/` | Env config + defaults + concurrency tuning |
 
 ---
 
 ## Golden rules
 
-- **Go calculates zones** — AI never touches coordinates or math
-- **AI crafts messages** — Go never writes SMS text
-- **All timestamps** — Unix milliseconds `int64`
+- **Go calculates zones** — AI never touches coordinates or haversine math
+- **AI crafts decisions/messages** — Go executes, validates, and dispatches
+- **All timestamps** — Unix milliseconds `int64` at transport boundaries
 - **All phone numbers** — E.164 format `+212XXXXXXXXX`
 - **All zone values** — `"red"` · `"orange"` · `"green"` (lowercase, always)
-- **Contracts are locked** — do not change `internal/models/models.go` without notifying all team members
+- **Contracts are locked** — update contracts only with team-wide agreement
+- **Errors are typed** — use `ErrorCode` constants, avoid raw string codes
 
 ---
 
 ## Prerequisites
 
-- Go 1.23+
-- Python 3.11+ (AI agent — separate repo)
-- PostgreSQL 15+ with PostGIS extension
-- Ollama with Llama 3.1 8B pulled locally
-- Nokia NaC account — [networkascode.nokia.io](https://networkascode.nokia.io)
-- Africa's Talking account (SMS gateway)
+- Go 1.18+
+- Python 3.11+ (for optional real AI agent)
+- PostgreSQL/PostGIS (optional in `DATABASE_URL=mock` mode)
+- CAMARA credentials (optional for local mocks)
+- SMS gateway credentials (optional for local mocks)
 
 ---
 
 ## Setup
 
-**1. Clone and enter the project**
+### 1. Clone and enter the project
 ```bash
-git clone https://github.com/yourteam/geodispatch
-cd geodispatch
+git clone https://github.com/geoDispatch/supervisor
+cd supervisor
 ```
 
-**2. Install Go dependencies**
+### 2. Install Go dependencies
 ```bash
 go mod tidy
 ```
 
-**3. Configure environment**
+### 3. Configure environment
 ```bash
 cp .env.example .env
-# Edit .env with your real credentials
+# Edit values only if needed — defaults are mock-first
 ```
 
-**4. Set up the database**
+---
+
+## Local simulation (recommended for current phase)
+
+### Terminal A — start mock CAMARA
 ```bash
-createdb geodispatch
-psql geodispatch -c "CREATE EXTENSION postgis;"
-psql geodispatch -f scripts/seed_shelters.sql
+go run scripts/mock_camara.go
 ```
 
-**5. Pull Ollama model**
+### Terminal B — start mock AI agent
 ```bash
-ollama pull llama3.1
-ollama create geodispatch-earthquake -f ai-agent/modelfiles/Modelfile.earthquake
-ollama create geodispatch-flood      -f ai-agent/modelfiles/Modelfile.flood
-ollama create geodispatch-heatwave   -f ai-agent/modelfiles/Modelfile.heatwave
+go run scripts/mock_agent.go
 ```
 
-**6. Start the Python AI agent** (separate terminal)
+### Terminal C — start supervisor in testing mode
 ```bash
-cd ../geodispatch-agent
-pip install -r requirements.txt
-python main.py
+go run cmd/testing/main.go
 ```
 
-**7. Run GeoDispatch supervisor**
+### Terminal D — trigger a disaster event
+```bash
+go run scripts/simulate_disaster.go --type earthquake --magnitude 6.8 --lat 33.5731 --lng -7.5898
+```
+
+You should see:
+- per-batch device decision tables in terminal output
+- zone summaries and narrative pushes
+- websocket updates on `/ws`
+
+---
+
+## Production runtime (skeleton)
+
+To run the production entrypoint:
+
 ```bash
 go run cmd/supervisor/main.go
 ```
 
-**8. Simulate a disaster** (separate terminal, for testing)
-```bash
-go run scripts/simulate_disaster.go --type earthquake --magnitude 6.8 --lat 31.6295 --lng -7.9811
-```
+Current status:
+- pipeline orchestration is in place
+- dispatch/DB/CAMARA contain mock-safe and scaffolded logic
+- intended for iterative hardening toward full production readiness
 
 ---
 
 ## Environment variables
 
 ```env
-# Nokia NaC
-NOKIA_NAC_TOKEN=your_token_here
-NOKIA_NAC_BASE_URL=https://network-as-code.nokia.com/api
+# Server
+SERVER_PORT=8080
 
-# Python AI Agent
+# Mock services (local)
+MOCK_CAMARA_PORT=8081
+MOCK_AGENT_PORT=5000
+
+# External service URLs (point to mocks by default)
+NOKIA_NAC_BASE_URL=http://localhost:8081
+NOKIA_NAC_TOKEN=mock_token_for_testing
 AGENT_URL=http://localhost:5000/decide
 
 # Database
-DATABASE_URL=postgres://user:pass@localhost:5432/geodispatch
+DATABASE_URL=mock
 
 # SMS Gateway
-AFRICASTALKING_API_KEY=your_key_here
-AFRICASTALKING_USERNAME=your_username
+AFRICASTALKING_API_KEY=your_sandbox_key_here
+AFRICASTALKING_USERNAME=sandbox
 
-# Server
-WS_PORT=8080
-SENSOR_PORT=8080
+# Local services
+OLLAMA_URL=http://localhost:11434
+
+# Concurrency
+CAMARA_CONCURRENCY=50
+SMS_CONCURRENCY=100
 ```
+
+---
+
+## Data contracts
+
+All inter-service communication is defined under `contracts/`:
+
+- `sensor_input.json`
+- `camara_device.json`
+- `ai_request.json`
+- `ai_response.json`
+- `ws_update.json`
+
+Notable contract update:
+- `nearest_shelter` → `nearest_shelters` in AI request schema (array, up to 3).
+
+---
+
+## Error handling
+
+Error semantics are centralized in:
+
+- `docs/ERRORDOCS.md`
+- typed codes in `internal/models/models.go` (`ErrorCode`)
+
+Primary codes:
+- `CAMARA_TIMEOUT`
+- `AGENT_ERROR`
+- `SMS_FAILED`
+- `DB_ERROR`
+- `QOS_FAILED`
+
+---
+
+## Changelog
+
+Detailed release history:
+- `docs/CHANGELOGS.md`
+
+Latest tracked version:
+- **v0.3.0** (mock-driven end-to-end simulation + pipeline expansion)
 
 ---
 
@@ -219,20 +290,13 @@ SENSOR_PORT=8080
 
 | Person | Role | Owns |
 |---|---|---|
-| ilias | Systems Lead | This repo — Go supervisor, CAMARA integration, architecture |
-| yassine | AI Engineer | Python agent, Ollama Modelfiles, Nokia NaC SDK |
-| ayoub | Frontend & Docs | React gov dashboard, Mapbox map, WebSocket client |
-| saad | Frontend & Pitch Lead | Presentation, live demo, frontend support |
-| houssam | Integration & DevOps | Testing, deployment, Nokia NaC simulators, DB setup |
-
----
-
-## Data contracts
-
-All inter-service communication is defined in `contracts/`. See `contracts/README.md` for the full contract specification and endpoint list.
+| ilias | Systems Lead | Go supervisor, CAMARA orchestration, architecture |
+| yassine | AI Engineer | Python agent decision layer |
+| ayoub / saad | Frontend & Dashboard | WebSocket dashboard and live visualization |
+| houssam | DevOps & Integration | Testing, integration, runtime workflows |
 
 ---
 
 ## License
 
-MIT — see `LICENSE`
+MIT — see `docs/LICENSE`
