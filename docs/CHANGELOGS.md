@@ -118,13 +118,40 @@
   · Dependency updates
       - Added `github.com/gorilla/websocket v1.5.3` to support dashboard realtime channel
 
+────────────────────────────────────────────────────────────────
+  v0.3.2 => v0.4.0                                      [MINOR]
+────────────────────────────────────────────────────────────────
+  + Containerization groundwork added
+      - Introduced `docker-compose.yml` as a starter scaffold (currently minimal/empty by design).
+      - Prepared the project for future containerized execution of:
+          supervisor service,
+          mock CAMARA,
+          mock AI agent,
+          optional database stack.
+      - Established a path from multi-terminal local runs to one-command orchestrated startup.
+
+  · Pipeline and runtime refinements
+      - Improved consistency across the full execution flow:
+          sensor ingest → CAMARA → AI decisioning → dispatch → websocket updates.
+      - Reduced instability in concurrent/batch processing paths during local simulation.
+      - Improved local mock behavior alignment with real runtime expectations.
+
+  · Contract/model alignment updates
+      - Applied small schema and typed-field consistency improvements between supervisor and AI boundaries.
+      - Tightened internal message handling for cleaner interoperability and fewer integration mismatches.
+
+  / Fixes and cleanup
+      - Resolved simulation-time regressions found during iterative testing.
+      - Reduced noisy failure behavior in batch runs.
+      - Improved release-note and docs consistency for better traceability.
+
 ════════════════════════════════════════════════════════════════
                         CURRENT RELEASE
 ════════════════════════════════════════════════════════════════
 
   BUILD STATUS:     ⚠️ FOUNDATION PHASE (SKELETON IN PLACE)
-  VERSION:          v0.3.0
-  RELEASE DATE:     August 17, 2026
+  VERSION:          v0.4.0
+  RELEASE DATE:     August 19, 2026
   FOCUS:            Pipeline orchestration, contracts, and infra scaffolding
 
 ════════════════════════════════════════════════════════════════
