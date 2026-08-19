@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "ai_request",
   "title": "AgentRequest",
-  "description": "Go supervisor → Python AI agent. Sent per zone batch (red / orange / green separately). Endpoint: POST http://localhost:5000/decide",
+  "description": "Go supervisor → Python AI agent. Sent per zone batch. Endpoint: POST http://localhost:5000/decide",
   "type": "object",
   "required": [
     "event_id",
@@ -48,12 +48,12 @@
     },
     "batch_index": {
       "type": "integer",
-      "enum": [0, 1, 2],
-      "description": "0=red, 1=orange, 2=green — processing priority order"
+      "minimum": 0,
+      "description": "Sequential batch number, 0-based. Multiple batches per zone possible."
     },
     "devices": {
       "type": "array",
-      "description": "All triaged devices in this zone batch",
+      "description": "All triaged devices in this zone batch (up to 20 per batch)",
       "minItems": 1,
       "items": {
         "$ref": "#/definitions/TriagedDevice"
@@ -61,8 +61,8 @@
     },
     "nearest_shelters": {
       "type": "array",
-      "description": "Up to 3 nearest shelters sorted by distance_km ascending. AI must pick the best one per device based on distance and remaining capacity.",
-      "minItems": 1,
+      "description": "Up to 3 nearest shelters to the epicenter, sorted by distance",
+      "minItems": 0,
       "maxItems": 3,
       "items": {
         "$ref": "#/definitions/Shelter"
@@ -133,7 +133,7 @@
       "properties": {
         "congestion_level": {
           "type": "string",
-          "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+          "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL", "UNKNOWN"]
         },
         "sms_delivery_rate": {
           "type": "number",
@@ -180,24 +180,17 @@
           "capacity": 300
         },
         {
-          "name": "Salle Omnisports Hay Riad",
-          "address": "Av. Al Majd, Hay Riad, Rabat",
-          "location": { "latitude": 33.9750, "longitude": -6.8550 },
+          "name": "Complexe Sportif Al Amal",
+          "address": "Avenue Hassan II, Rabat",
+          "location": { "latitude": 33.9850, "longitude": -6.8550 },
           "distance_km": 2.1,
-          "capacity": 800
-        },
-        {
-          "name": "Lycée Technique Rabat",
-          "address": "Rue Patrice Lumumba, Rabat",
-          "location": { "latitude": 33.9850, "longitude": -6.8700 },
-          "distance_km": 3.4,
           "capacity": 500
         }
       ],
       "network_status": {
         "congestion_level": "HIGH",
         "sms_delivery_rate": 0.72,
-        "qos_status": "requested"
+        "qos_status": "active"
       }
     }
   ]

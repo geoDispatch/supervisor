@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
- 
+
 	"github.com/geodispatch/supervisor/config"
 	"github.com/geodispatch/supervisor/internal/agent"
 	"github.com/geodispatch/supervisor/internal/camara"
@@ -18,64 +20,195 @@ import (
 	"github.com/geodispatch/supervisor/internal/zones"
 )
 
+// ─────────────────────────────────────────────
+//  PER-DEVICE TIMING RECORD
+// ─────────────────────────────────────────────
+type deviceTiming struct {
+	tSensor        time.Time
+	tCAMARAStart   time.Time
+	tCAMARADone    time.Time
+	tAgentSent     time.Time
+	tAgentReceived time.Time
+	tSMSSent       time.Time
+}
+
+type deviceResult struct {
+	decision models.DeviceDecision
+	distKm   float64
+	timing   deviceTiming
+}
+
+// ─────────────────────────────────────────────
+//  LOGGING HELPERS
+// ─────────────────────────────────────────────
+
+func elapsedMS(t time.Time) int64 {
+	return time.Since(t).Milliseconds()
+}
+
+func zoneTag(zone string) string {
+	switch zone {
+	case "red":
+		return "🔴 RED   "
+	case "orange":
+		return "🟠 ORANGE"
+	case "yellow":
+		return "🟡 YELLOW"
+	case "green":
+		return "🟢 GREEN "
+	default:
+		return "⬜ ???   "
+	}
+}
+
+func reachTag(status string) string {
+	if status == string(models.NotConnected) {
+		return "📵 UNREACH"
+	}
+	return "📶 REACH  "
+}
+
+func actionTag(action models.ActionType) string {
+	switch action {
+	case models.ActionSMS:
+		return "💬 SMS    "
+	case models.ActionRescue:
+		return "🚁 RESCUE "
+	case models.ActionBoth:
+		return "💬+🚁 BOTH"
+	default:
+		return "⏭  none  "
+	}
+}
+
+func truncate(s string, n int) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	if len(s) <= n {
+		return s + strings.Repeat(" ", n-len(s))
+	}
+	return s[:n-1] + "…"
+}
+
+func durStr(a, b time.Time) string {
+	d := b.Sub(a)
+	if d < time.Millisecond {
+		return fmt.Sprintf("%dµs", d.Microseconds())
+	}
+	return fmt.Sprintf("%dms", d.Milliseconds())
+}
+
+// ─────────────────────────────────────────────
+//  BATCH TABLE
+// ─────────────────────────────────────────────
+
+func printBatchTable(batchIdx int, results []deviceResult, batchDur time.Duration) {
+	const w        = 105
+	const shelterW = 24
+
+	div := strings.Repeat("═", w)
+
+	// ── TABLE 1: device info ─────────────────────────────────────────────
+	fmt.Printf("╔%s╗\n", div)
+	fmt.Printf("║  %-*s║\n", w-2,
+		fmt.Sprintf("BATCH #%d — %d devices — completed in %s", batchIdx, len(results), batchDur))
+	fmt.Printf("╠%s╣\n", div)
+	fmt.Printf("║  %-16s %-9s %-9s %-11s %-11s %-5s %-5s %-*s║\n",
+		"PHONE", "ZONE", "DIST(km)", "ACTION", "REACH", "PRIO", "CONF",
+		shelterW + 6, "SHELTER")
+	fmt.Printf("╠%s╣\n", div)
+
+	for _, r := range results {
+		prio := "—"
+		if r.decision.RescuePriority > 0 {
+			prio = fmt.Sprintf("P%d", r.decision.RescuePriority)
+		}
+		fmt.Printf("║  %-16s %-9s %-7s %-10s %-10s %-5s %-5s %-*s║\n",
+			r.decision.Phone,
+			zoneTag(string(r.decision.ZoneConfirmed)),
+			fmt.Sprintf("%.2f", r.distKm),
+			actionTag(r.decision.Action),
+			reachTag(""),
+			prio,
+			fmt.Sprintf("%.0f%%", r.decision.Confidence*100),
+			shelterW+6, truncate(r.decision.ShelterName, shelterW),
+		)
+	}
+
+	// ── TABLE 2: time info ─────────────────────────────────────────────
+	fmt.Printf("╚%s╝\n", div)
+	fmt.Println()
+
+	const tw   = 90
+	tdiv := strings.Repeat("═", tw)
+
+	fmt.Printf("╔%s╗\n", tdiv)
+	fmt.Printf("║  %-*s║\n", tw-2, "TIMING BREAKDOWN — /sensor → SMS dispatched")
+	fmt.Printf("╠%s╣\n", tdiv)
+	fmt.Printf("║  %-16s  %-14s  %-13s  %-15s  %-13s  %-7s║\n",
+		"PHONE", "SENSOR→CAMARA", "CAMARA→AGENT", "AGENT→DECISION", "DECISION→SMS", "TOTAL")
+	fmt.Printf("╠%s╣\n", tdiv)
+
+	for _, r := range results {
+		t := r.timing
+		fmt.Printf("║  %-16s  %-14s  %-13s  %-15s  %-13s  %-7s║\n",
+			r.decision.Phone,
+			durStr(t.tSensor, t.tCAMARAStart),
+			durStr(t.tCAMARADone, t.tAgentSent),
+			durStr(t.tAgentSent, t.tAgentReceived),
+			durStr(t.tAgentReceived, t.tSMSSent),
+			durStr(t.tSensor, t.tSMSSent),
+		)
+	}
+
+	fmt.Printf("╚%s╝\n", tdiv)
+	fmt.Println()
+}
+
+// ─────────────────────────────────────────────
+//  MAIN
+// ─────────────────────────────────────────────
+
 func main() {
 	t0 := time.Now()
-
-	// Step 1 — Load config from .env
 	cfg := config.Load()
-	log.Printf("[T+%dms] GeoDispatch supervisor starting...", ms(t0))
+	log.Printf("[T+%dms] GeoDispatch supervisor starting...", elapsedMS(t0))
 
-	// Step 2 — Connect to PostgreSQL
-	db, err := database.Connect(cfg.DatabaseURL)
-	if err != nil {
-		log.Fatalf("failed to connect to database: %v", err)
-	}
-	defer db.Close()
-	log.Printf("[T+%dms] database connected", ms(t0))
+	var db *database.DB = nil
+	log.Printf("[T+%dms] mock database connected (bypassed for testing)", elapsedMS(t0))
 
-	// Step 3 — Start WebSocket hub
 	hub := dashboard.NewHub()
 	go hub.Run()
-	log.Printf("[T+%dms] websocket hub started", ms(t0))
+	log.Printf("[T+%dms] websocket hub started", elapsedMS(t0))
 
-	// Step 4 — Register HTTP routes
 	mux := http.NewServeMux()
- 
 	mux.HandleFunc("/sensor", func(w http.ResponseWriter, r *http.Request) {
 		tEvent := time.Now()
-		log.Printf("[T+%dms] POST /sensor received", ms(t0))
- 
+		log.Printf("[T+%dms] POST /sensor received", elapsedMS(t0))
 		input, err := sensor.Parse(r)
 		if err != nil {
-			log.Printf("[T+%dms] sensor parse error: %v", ms(t0), err)
+			log.Printf("[T+%dms] sensor parse error: %v", elapsedMS(t0), err)
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
- 
 		w.WriteHeader(http.StatusAccepted)
 		go runPipeline(cfg, db, hub, input, tEvent, t0)
 	})
- 
 	mux.HandleFunc("/ws", hub.ServeWS)
- 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
 
-	// Step 5 — Start HTTP server
 	addr := ":" + cfg.ServerPort
-	log.Printf("[T+%dms] GeoDispatch supervisor listening on %s", ms(t0), addr)
+	log.Printf("[T+%dms] GeoDispatch supervisor listening on %s", elapsedMS(t0), addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }
 
-/* UTILS */
-
-func ms(t time.Time) int64 {
-	return time.Since(t).Milliseconds()
-}
+// ─────────────────────────────────────────────
+//  PIPELINE
+// ─────────────────────────────────────────────
 
 func runPipeline(
 	cfg *config.Config,
@@ -85,131 +218,105 @@ func runPipeline(
 	tEvent time.Time,
 	tBoot time.Time,
 ) {
-	log.Printf("[T+%dms] pipeline start — event_id=%s type=%s severity=%.1f",
-		ms(tBoot), input.EventID, input.DisasterType, input.Severity)
+	banner := strings.Repeat("━", 68)
+	fmt.Printf("\n┏%s┓\n", banner)
+	fmt.Printf("┃  🌍 GEODISPATCH EVENT STARTED                                      ┃\n")
+	fmt.Printf("┃  Event ID    : %-52s┃\n", input.EventID)
+	fmt.Printf("┃  Type        : %-52s┃\n", input.DisasterType)
+	fmt.Printf("┃  Severity    : %-52s┃\n", fmt.Sprintf("%.1f", input.Severity))
+	fmt.Printf("┃  Epicenter   : %-52s┃\n", fmt.Sprintf("%.4f, %.4f", input.Epicenter.Lat, input.Epicenter.Lng))
+	fmt.Printf("┃  Radius      : %-52s┃\n", fmt.Sprintf("%.1f km", input.RadiusKm))
+	fmt.Printf("┗%s┛\n\n", banner)
 
 	ctx := context.Background()
-
-	// Send the event_start to WS
 	hub.BroadcastEventStart(input)
-	log.Printf("[T+%dms] dashboard: event_start sent", ms(tBoot))
 
-
-	// Launch two goRoutines
-	// A: geofencing + QoS (area-level, one call each, not per device)
-	// B: nearest shelter from PostGIS
 	var (
 		nearestShelters []models.Shelter
-		networkStatus 	models.NetworkStatus
-		wgAreaCalls   	sync.WaitGroup
+		networkStatus   models.NetworkStatus
+		congestionLevel models.CongestionLevel
+		wgAreaCalls     sync.WaitGroup
 	)
-	wgAreaCalls.Add(2)
+	wgAreaCalls.Add(3)
 
-	// Goroutine A — area-level CAMARA calls
+	// A — QoS on Demand
 	go func() {
 		defer wgAreaCalls.Done()
-		tA := time.Now()
- 
-		// Creating 2 other goRoutines A1 and A2
-		var wgA sync.WaitGroup
-		wgA.Add(2)
- 
-		// A1: Geofencing boundary check for the epicenter area
-		go func() {
-			defer wgA.Done()
-			camara.CheckGeofencing(ctx, cfg, input.Epicenter, input.RadiusKm)
-			log.Printf("[T+%dms] geofencing done", ms(tBoot))
-		}()
-
-		// A2: QoS on Demand — request network priority for disaster area
-		go func() {
-			defer wgA.Done()
-			status, err := camara.RequestQoS(ctx, cfg, input.Epicenter)
-			if err != nil {
-				log.Printf("[T+%dms] QoS request failed: %v", ms(tBoot), err)
-				networkStatus = models.NetworkStatus{QoSStatus: models.QoSFailed}
-				return
-			}
-			networkStatus = status
-			log.Printf("[T+%dms] QoS done — status=%s", ms(tBoot), status.QoSStatus)
-		}()
-
-		wgA.Wait()
-		log.Printf("[T+%dms] goroutine A done in %dms", ms(tBoot), ms(tA))
-	}()
-
-	// Goroutine B — DB shelter query
-	go func() {
-		defer wgAreaCalls.Done()
-		tB := time.Now()
-
-		shelters, err := db.NearestShelters(ctx, input.Epicenter, 3)
+		status, err := camara.RequestQoS(ctx, cfg, input.Epicenter)
 		if err != nil {
-			log.Printf("[T+%dms] shelter query failed: %v", ms(tBoot), err)
+			networkStatus = models.NetworkStatus{QoSStatus: models.QoSFailed}
 			return
 		}
-		if len(shelters) == 0 {
-			log.Printf("[T+%dms] no shelters found near epicenter", ms(tBoot))
+		networkStatus = status
+	}()
+
+	// B — nearest shelters from DB
+	go func() {
+		defer wgAreaCalls.Done()
+		shelters, err := db.NearestShelters(ctx, input.Epicenter, 3)
+		if err != nil || len(shelters) == 0 {
+			log.Printf("[T+%dms] shelter query failed or empty: %v", elapsedMS(tBoot), err)
 			return
 		}
 		nearestShelters = shelters
-		log.Printf("[T+%dms] goroutine B done in %dms — %d shelters found (closest: %s %.1fkm)",
-			ms(tBoot), ms(tB), len(shelters), shelters[0].Name, shelters[0].DistanceKm)
 	}()
 
-	// ── Per-device CAMARA fetch — fires immediately, doesn't wait for A or B ──
-	//
-	// Semaphore 50: 200 devices → 4 rounds × ~400ms = ~1.6s
-	// Within each device slot: location + reachability fire in parallel.
-	// Each resolved device → haversine → pushed into min-heap sorted by distance_km.
-	//
-	// Min-heap threshold: every 20 devices resolved → pop closest 20 → fire to AI agent.
-	// AI batch fires BEFORE all devices are resolved (early fire optimisation).
+	// C — congestion insights  ← ADD THIS BLOCK
+	go func() {
+		defer wgAreaCalls.Done()
+		level, err := camara.GetCongestion(ctx, cfg, input.Epicenter)
+		if err != nil {
+			log.Printf("[T+%dms] congestion query failed: %v", elapsedMS(tBoot), err)
+			congestionLevel = models.CongestionUnknown
+			return
+		}
+		congestionLevel = level
+	}()
 
+	wgAreaCalls.Wait()
+	networkStatus.CongestionLevel = congestionLevel
+
+	// D — fetch phones from DB sorted by distance to epicenter
 	phones, err := db.PhonesNearEpicenter(ctx, input.Epicenter, input.RadiusKm)
-	if err != nil {
-		log.Printf("[T+%dms] phones query failed: %v", ms(tBoot), err)
+	if err != nil || len(phones) == 0 {
+		log.Printf("[T+%dms] no phones found near epicenter: %v", elapsedMS(tBoot), err)
 		return
 	}
-	log.Printf("[T+%dms] %d phones in affected radius", ms(tBoot), len(phones))
- 
-	heap := zones.NewMinHeap()
-	batchCh := make(chan []models.TriagedDevice, 20) // buffered — AI consumes async
-	var wgDevices sync.WaitGroup
-	sem := make(chan struct{}, 50) // semaphore: 50 concurrent device slots
 
-	// Heap flusher — runs in its own goroutine, fires AI batches as heap fills
+	timingMap := make(map[string]*deviceTiming)
+	distMap   := make(map[string]float64)
+	var mu sync.Mutex 
+
+	heap := zones.NewMinHeap()
+	batchCh := make(chan []models.TriagedDevice, 20)
+
+	var wgDevices sync.WaitGroup
+
+	const camaraMaxConcurrent = 50
+	sem := make(chan struct{}, camaraMaxConcurrent)
+
 	go func() {
 		const batchSize = 20
-		for device := range heap.Stream() {
-			if heap.Len() >= batchSize {
-				batch := heap.PopN(batchSize)
-				log.Printf("[T+%dms] batch ready — %d devices, closest=%.2fkm",
-					ms(tBoot), len(batch), batch[0].DistanceKm)
-				batchCh <- batch
+		for range heap.Stream() {
+			for heap.Len() >= batchSize {
+				batchCh <- heap.PopN(batchSize)
 			}
 		}
-
-		if heap.Len() > 0 {
-			remainder := heap.PopAll()
-			log.Printf("[T+%dms] flushing remainder — %d devices", ms(tBoot), len(remainder))
-			batchCh <- remainder
+		if remaining := heap.PopAll(); len(remaining) > 0 {
+			batchCh <- remaining
 		}
 		close(batchCh)
 	}()
 
-	// Each device (phone) gets its own goRoutine
 	for _, phone := range phones {
 		wgDevices.Add(1)
-		sem <- struct{}{} // acquire slot
-onstruc
+		sem <- struct{}{}
 		go func(p string) {
 			defer wgDevices.Done()
-			defer func() { <-sem }() // release slot
- 
-			tDev := time.Now()
+			defer func() { <-sem }()
 
-			// GUESS WHAT ? ANOTHER TWO GOROUTINES
+			tCAMARAStart := time.Now()
+
 			var (
 				loc   *models.CAMARALocationResponse
 				reach *models.CAMARAReachabilityResponse
@@ -217,39 +324,42 @@ onstruc
 			)
 			wgDev.Add(2)
 
-			// location goRoutine
 			go func() {
 				defer wgDev.Done()
 				l, err := camara.GetLocation(ctx, cfg, p)
 				if err != nil {
-					log.Printf("[T+%dms] location failed phone=%s: %v", ms(tBoot), p, err)
 					return
 				}
 				loc = l
 			}()
 
-			// reachability goRoutine
 			go func() {
 				defer wgDev.Done()
 				re, err := camara.GetReachability(ctx, cfg, p)
 				if err != nil {
-					log.Printf("[T+%dms] reachability failed phone=%s: %v", ms(tBoot), p, err)
 					return
 				}
 				reach = re
 			}()
-
 			wgDev.Wait()
+			tCAMARADone := time.Now()
 
 			if loc == nil || reach == nil {
-				log.Printf("[T+%dms] skipping phone=%s (CAMARA partial failure)", ms(tBoot), p)
 				return
 			}
- 
-			// Haversine — zone assigned here
+
 			distKm := zones.Haversine(loc.Area.Center, input.Epicenter)
 			zone := zones.Assign(distKm, input.RadiusKm)
- 
+
+			mu.Lock()
+			distMap[p] = distKm
+			timingMap[p] = &deviceTiming{
+				tSensor:      tEvent,
+				tCAMARAStart: tCAMARAStart,
+				tCAMARADone:  tCAMARADone,
+			}
+			mu.Unlock()
+
 			device := models.TriagedDevice{
 				Phone:              p,
 				Latitude:           loc.Area.Center.Lat,
@@ -261,13 +371,8 @@ onstruc
 				Zone:               zone,
 				DistanceKm:         distKm,
 			}
- 
 			heap.Push(device)
- 
-			log.Printf("[T+%dms] device resolved phone=%s zone=%s dist=%.2fkm in %dms",
-				ms(tBoot), p, zone, distKm, ms(tDev))
 
-			// Stream device dot to dashboard immediately
 			hub.BroadcastDeviceUpdate(models.DeviceUpdate{
 				Phone:     p,
 				Latitude:  device.Latitude,
@@ -278,141 +383,151 @@ onstruc
 		}(phone)
 	}
 
-	// Wait for all device goroutines, then signal heap flusher
 	wgDevices.Wait()
 	heap.Close()
-	log.Printf("[T+%dms] all CAMARA device fetches complete", ms(tBoot))
-
-	// ── Wait for area calls (A + B) before building AI requests 
-	wgAreaCalls.Wait()
-	log.Printf("[T+%dms] area calls (geofencing + QoS + DB) complete", ms(tBoot))
-
-	// ── AI agent — consume batches sequentially (closest → furthest) ─────────
-	//
-	// Sequential by batch: finish closest 20 entirely (SMS + rescue + WS) before
-	// sending next batch to AI. Guarantees nearest people are handled first.
 
 	agentClient := agent.NewClient(cfg.AgentURL)
 	batchIdx := 0
 	zoneSummary := models.ZoneSummary{}
 
 	for batch := range batchCh {
-		tBatch := time.Now()
-		log.Printf("[T+%dms] sending batch %d to AI agent (%d devices)",
-			ms(tBoot), batchIdx, len(batch))
+		tAgentSent := time.Now()
 
 		req := models.AgentRequest{
-			EventID:        	input.EventID,
-			DisasterType:   	input.DisasterType,
-			Severity:       	input.Severity,
-			AftershockRisk: 	input.AftershockRisk,
-			TsunamiRisk:    	input.TsunamiRisk,
-			Zone:           	batch[0].Zone,
-			BatchIndex:     	batchIdx,
-			Devices:        	batch,
-			NearestShelters: 	nearestShelters,
-			NetworkStatus:  	networkStatus,
+			EventID:         input.EventID,
+			DisasterType:    input.DisasterType,
+			Severity:        input.Severity,
+			AftershockRisk:  input.AftershockRisk,
+			TsunamiRisk:     input.TsunamiRisk,
+			Zone:            batch[0].Zone,
+			BatchIndex:      batchIdx,
+			Devices:         batch,
+			NearestShelters: nearestShelters,
+			NetworkStatus:   networkStatus,
 		}
 
 		resp, err := agentClient.Decide(ctx, req)
 		if err != nil {
-			log.Printf("[T+%dms] AI agent error batch %d: %v", ms(tBoot), batchIdx, err)
-			
+			log.Printf("[ERROR] AI agent batch %d: %v", batchIdx, err)
 			hub.BroadcastError(models.ErrorUpdate{
-				Code:    models.ErrSMSFailed,
+				Code:    models.ErrAgentError,
 				Message: err.Error(),
 				Fatal:   false,
 			}, input.EventID)
-
 			batchIdx++
 			continue
 		}
 
-		log.Printf("[T+%dms] AI response batch %d received in %dms — confidence=%.2f",
-			ms(tBoot), batchIdx, ms(tBatch), resp.Confidence)
+		tAgentReceived := time.Now()
 
-		// ── Dispatch: SMS + rescue + WS push — all in parallel per batch ─────
+		// stamp agent times on every device in this batch
+		for _, dev := range batch {
+			mu.Lock()
+			if t, ok := timingMap[dev.Phone]; ok {
+				t.tAgentSent = tAgentSent
+				t.tAgentReceived = tAgentReceived
+			}
+			mu.Unlock()
+		}
+
+		// ── dispatch: SMS + rescue — collect results ──────────────────────
+		results := make([]deviceResult, len(resp.Decisions))
+
 		var wgDispatch sync.WaitGroup
- 
-		for _, decision := range resp.Decisions {
+		for i, decision := range resp.Decisions {
 			wgDispatch.Add(1)
-			go func(d models.DeviceDecision) {
+			go func(idx int, d models.DeviceDecision) {
 				defer wgDispatch.Done()
- 
-				// SMS
+
 				if d.Action == models.ActionSMS || d.Action == models.ActionBoth {
-					if err := dispatch.SendSMS(ctx, cfg, d.Phone, d.SMSMessage); err != nil {
-						log.Printf("[T+%dms] SMS failed phone=%s: %v", ms(tBoot), d.Phone, err)
-						hub.BroadcastError(models.ErrorUpdate{
-							Code:    models.ErrSMSFailed,
-							Message: err.Error(),
-							Phone:   d.Phone,
-							Fatal:   false,
-						}, input.EventID)
-					} else {
-						log.Printf("[T+%dms] SMS sent phone=%s", ms(tBoot), d.Phone)
-					}
+					dispatch.SendSMS(ctx, cfg, d.Phone, d.SMSMessage)
 				}
- 
-				// Rescue flag
+
+				tSMSSent := time.Now()
+
 				if d.Action == models.ActionRescue || d.Action == models.ActionBoth {
-					if err := dispatch.FlagRescue(ctx, db, d, input.EventID); err != nil {
-						log.Printf("[T+%dms] rescue flag failed phone=%s: %v", ms(tBoot), d.Phone, err)
-					} else {
-						log.Printf("[T+%dms] rescue flagged phone=%s priority=%d", ms(tBoot), d.Phone, d.RescuePriority)
+					if db != nil {
+						dispatch.FlagRescue(ctx, db, d, input.EventID)
 					}
 				}
- 
-				// WS device update (with SMS/rescue status now known)
+
+				mu.Lock()
+				dist := distMap[d.Phone]
+				var timing deviceTiming
+				if t, ok := timingMap[d.Phone]; ok {
+					t.tSMSSent = tSMSSent
+					timing = *t
+				}
+				updateZoneSummary(&zoneSummary, d)
+				mu.Unlock()
+
+				results[idx] = deviceResult{
+					decision: d,
+					distKm:   dist,
+					timing:   timing,
+				}
+
 				hub.BroadcastDeviceUpdate(models.DeviceUpdate{
 					Phone:      d.Phone,
 					Zone:       d.ZoneConfirmed,
 					SMSSent:    d.Action == models.ActionSMS || d.Action == models.ActionBoth,
 					RescueFlag: d.Action == models.ActionRescue || d.Action == models.ActionBoth,
 				}, input.EventID)
- 
-				// Update zone summary counters
-				updateZoneSummary(&zoneSummary, d)
-			}(decision)
+				
+			}(i, decision)
 		}
- 
 		wgDispatch.Wait()
- 
-		// QoS upgrade if AI requested it
+
+		// ── print everything sequentially after all goroutines done ───────
+		printBatchTable(batchIdx, results, time.Since(tAgentSent))
+
 		if resp.RequestQoS {
-			log.Printf("[T+%dms] AI requested QoS upgrade for zone=%s", ms(tBoot), resp.Zone)
 			go camara.UpgradeQoS(ctx, cfg, input.Epicenter)
 		}
- 
-		// Push zone summary + narrative after each batch
+
 		hub.BroadcastZoneSummary(zoneSummary, input.EventID)
 		hub.BroadcastNarrative(resp.Zone, resp.GovNarrative, input.EventID)
- 
-		log.Printf("[T+%dms] batch %d fully dispatched in %dms",
-			ms(tBoot), batchIdx, ms(tBatch))
- 
 		batchIdx++
 	}
- 
-	log.Printf("[T+%dms] pipeline complete — event_id=%s total=%dms",
-		ms(tBoot), input.EventID, ms(tEvent))
+
+	// ── pipeline complete banner ──────────────────────────────────────────
+	total := time.Since(tEvent)
+	banner = strings.Repeat("━", 68)
+	fmt.Printf("\n┏%s┓\n", banner)
+	fmt.Printf("┃  ✅ PIPELINE COMPLETE                                               ┃\n")
+	fmt.Printf("┃  Event ID    : %-52s┃\n", input.EventID)
+	fmt.Printf("┃  Total time  : %-52s┃\n", total)
+	fmt.Printf("┃  Batches     : %-52s┃\n", fmt.Sprintf("%d", batchIdx))
+	fmt.Printf("┃  Zone counts : 🔴 %d  🟠 %d  🟢 %d                                  ┃\n",
+		zoneSummary.RedTotal, zoneSummary.OrangeTotal, zoneSummary.GreenTotal)
+	fmt.Printf("┗%s┛\n\n", banner)
 }
 
-// updateZoneSummary mutates the running zone counters after each device decision.
-func updateZoneSummary(s *models.ZoneSummary, d models.DeviceDecision) {
-    reachable := d.Action == models.ActionSMS || d.Action == models.ActionBoth
-    rescue    := d.Action == models.ActionRescue || d.Action == models.ActionBoth
+// ─────────────────────────────────────────────
+//  ZONE SUMMARY
+// ─────────────────────────────────────────────
 
-    switch d.ZoneConfirmed {
-    case models.ZoneRed:
-        s.RedTotal++
-        if reachable { s.RedReachable++ }
-        if rescue    { s.RedRescue++ }    // rescue only meaningful in red
-    case models.ZoneOrange:
-        s.OrangeTotal++
-        if reachable { s.OrangeReachable++ }
-    case models.ZoneGreen:
-        s.GreenTotal++
-        if reachable { s.GreenReachable++ }
-    }
+func updateZoneSummary(s *models.ZoneSummary, d models.DeviceDecision) {
+	reachable := d.Action == models.ActionSMS || d.Action == models.ActionBoth
+	rescue := d.Action == models.ActionRescue || d.Action == models.ActionBoth
+	switch d.ZoneConfirmed {
+	case models.ZoneRed:
+		s.RedTotal++
+		if reachable {
+			s.RedReachable++
+		}
+		if rescue {
+			s.RedRescue++
+		}
+	case models.ZoneOrange:
+		s.OrangeTotal++
+		if reachable {
+			s.OrangeReachable++
+		}
+	case models.ZoneGreen:
+		s.GreenTotal++
+		if reachable {
+			s.GreenReachable++
+		}
+	}
 }

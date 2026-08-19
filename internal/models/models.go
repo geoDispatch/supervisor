@@ -47,6 +47,7 @@ const (
 	CongestionMedium   CongestionLevel = "MEDIUM"
 	CongestionHigh     CongestionLevel = "HIGH"
 	CongestionCritical CongestionLevel = "CRITICAL"
+	CongestionUnknown  CongestionLevel = "UNKNOWN"
 )
 
 // ── QoS status (from CAMARA QoS on Demand API) ───────────────
