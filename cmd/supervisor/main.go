@@ -173,9 +173,14 @@ func main() {
 	cfg := config.Load()
 	log.Printf("[T+%dms] GeoDispatch supervisor starting...", elapsedMS(t0))
 
-	var db *database.DB = nil
-	log.Printf("[T+%dms] mock database connected (bypassed for testing)", elapsedMS(t0))
-
+	ctx := context.Background()
+	
+	db, err := database.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("database connection failed: %v", err)
+	}
+	defer db.Close()
+	
 	hub := dashboard.NewHub()
 	go hub.Run()
 	log.Printf("[T+%dms] websocket hub started", elapsedMS(t0))

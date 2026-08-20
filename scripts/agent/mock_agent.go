@@ -208,6 +208,11 @@ func buildUnreachableReasoning(zone string) string {
 func main() {
 	http.HandleFunc("/decide", handleDecide)
 
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+
 	port := ":5000"
 	log.Printf("🟢 Mock AI Agent Server listening on http://localhost%s", port)
 	log.Fatal(http.ListenAndServe(port, nil))

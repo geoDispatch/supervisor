@@ -1,0 +1,8 @@
+.env
+.git
+.gitignore
+docs/
+contracts/
+*.md
+*.sql
+docker-compose.yml

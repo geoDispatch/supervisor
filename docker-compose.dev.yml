@@ -1,0 +1,88 @@
+version: "3.9"
+
+services:
+
+  # ── Postgres + PostGIS ─────────────────────────────────────────────────────
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: geodispatch_postgres_dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       geodispatch
+      POSTGRES_USER:     geodispatch
+      POSTGRES_PASSWORD: geodispatch
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+      - ./migrations/002_events.sql:/docker-entrypoint-initdb.d/002_events.sql:ro
+      - ./scripts/seed/seed_shelters.sql:/docker-entrypoint-initdb.d/003_seed_shelters.sql:ro
+      - ./scripts/seed/seed_devices.sql:/docker-entrypoint-initdb.d/004_seed_devices.sql:ro 
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geodispatch -d geodispatch"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ── Mock CAMARA server ─────────────────────────────────────────────────────
+  mock_camara:
+    build:
+      context: .
+      dockerfile: scripts/camara/Dockerfile
+    container_name: geodispatch_mock_camara
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/qos || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+  # ── Mock AI agent ──────────────────────────────────────────────────────────
+  mock_agent:
+    build:
+      context: .
+      dockerfile: scripts/agent/Dockerfile
+    container_name: geodispatch_mock_agent
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5000/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+  # ── Go supervisor ──────────────────────────────────────────────────────────
+  supervisor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: geodispatch_supervisor_dev
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock_camara:
+        condition: service_healthy
+      mock_agent:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  postgres_dev_data:
