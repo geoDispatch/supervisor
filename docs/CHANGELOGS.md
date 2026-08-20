@@ -145,14 +145,86 @@
       - Reduced noisy failure behavior in batch runs.
       - Improved release-note and docs consistency for better traceability.
 
+────────────────────────────────────────────────────────────────
+  v0.4.2 => v0.5.0                                      [MAJOR]
+────────────────────────────────────────────────────────────────
+  + Real PostgreSQL integration with PostGIS support
+      - Implemented `internal/database/postgres.go` with connection pooling
+      - Added context-aware DB operations with proper error handling
+      - Integrated `github.com/lib/pq` PostgreSQL driver
+      - Replaced mock-only DB mode with production-ready Postgres client
+
+  + Database schema and migrations foundation
+      - Created `migrations/001_init.sql`:
+          devices table (phone, location, GIS index)
+          shelters table (name, address, capacity, location)
+      - Created `migrations/002_events.sql`:
+          events table (disaster events, metadata)
+          device_logs table (AI decisions, audit trail)
+          rescue_flags table (rescue queue with priority)
+      - All tables use PostGIS geography types for accurate distance calculations
+
+  + Full database operations layer
+      - `internal/database/devices.go` — PhonesNearEpicenter query + UpsertDeviceLocation
+      - `internal/database/shelters.go` — NearestShelters with PostGIS distance ordering
+      - `internal/database/logs.go` — InsertEvent, InsertDeviceLog, FlagRescue, RescueFlagsForEvent
+      - All operations are context-aware and transaction-safe
+
+  + Production-grade Docker Compose setup
+      - Added `docker-compose.yml` with PostgreSQL + Supervisor services
+      - Added `docker-compose.dev.yml` with full stack:
+          PostgreSQL 16 + PostGIS (with health checks + seed scripts)
+          Mock CAMARA service (containerized)
+          Mock AI Agent service (containerized)
+          Supervisor (depends_on ordering for startup safety)
+      - Added `Dockerfile` — multi-stage build, optimized Alpine base, minimal image size
+      - Added `.dockerignore` to keep Docker context lean
+
+  + Service containerization and health infrastructure
+      - Created `scripts/camara/Dockerfile` for mock CAMARA service
+      - Created `scripts/agent/Dockerfile` for mock AI Agent service
+      - Added health check endpoints:
+          Mock CAMARA: `GET /qos`
+          Mock AI Agent: `GET /health`
+          Supervisor: `GET /health`
+      - Compose health checks ensure services start in correct dependency order
+
+  + Database seeding and test data
+      - Created `scripts/seed/seed_shelters.sql` — MENA shelter coordinates
+      - Created `scripts/seed/seed_devices.sql` — 40 test phones across red/orange/green zones
+      - Integrated seed scripts into Compose `docker-entrypoint-initdb.d/` for automatic population
+
+  + Supervisor runtime updates
+      - Updated `cmd/supervisor/main.go` to perform real DB connection on startup
+      - Connected to PostgreSQL via `database.Connect()` with pool tuning
+      - Removed mock-mode bypass (DATABASE_URL=mock no longer supported)
+      - Added graceful shutdown with `defer db.Close()`
+
+  + Disaster simulation tool enhancements
+      - Updated `scripts/simulate_disaster.go` to:
+          Accept command-line flags (--host, --event, --severity)
+          Pretty-print disaster event payload
+          Show elapsed time and HTTP response details
+          Provide helpful feedback for debugging
+
+  / Dependency updates
+      - Removed `github.com/joho/godotenv` (no longer needed with .env files in Compose)
+      - Added `github.com/lib/pq` for PostgreSQL wire protocol
+      - Upgraded Go version context to 1.22 in Dockerfiles
+
+  / Project reorganization
+      - Moved mock services to `scripts/camara/` and `scripts/agent/` for modular builds
+      - Created `scripts/seed/` directory for SQL seeding scripts
+      - Reorganized script structure to support per-service Dockerfiles
+
 ════════════════════════════════════════════════════════════════
                         CURRENT RELEASE
 ════════════════════════════════════════════════════════════════
 
   BUILD STATUS:     ⚠️ FOUNDATION PHASE (SKELETON IN PLACE)
-  VERSION:          v0.4.0
-  RELEASE DATE:     August 19, 2026
-  FOCUS:            Pipeline orchestration, contracts, and infra scaffolding
+  VERSION:          v0.5.0
+  RELEASE DATE:     August 21, 2026
+  FOCUS:            Pipeline tests
 
 ════════════════════════════════════════════════════════════════
   Legend:  + Added          · Changed             / Fixed

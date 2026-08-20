@@ -62,10 +62,10 @@ geodispatch/
 │   │   └── broadcast.go             ← WSUpdate emit helpers
 │   │
 │   ├── database/
-│   │   ├── postgres.go              ← DB connector (mock mode supported)
-│   │   ├── shelters.go              ← nearest shelter query hooks
-│   │   ├── devices.go               ← device/phone DB operations
-│   │   └── logs.go                  ← alert logs, event history
+│   │   ├── postgres.go              ← PostgreSQL connection pool + health check
+│   │   ├── shelters.go              ← PostGIS nearest-shelter queries
+│   │   ├── devices.go               ← device location queries + upsert
+│   │   └── logs.go                  ← event/device_log/rescue_flag writes
 │   │
 │   ├── sensor/
 │   │   └── handler.go               ← HTTP parser for incoming sensor POST
@@ -82,20 +82,26 @@ geodispatch/
 │   └── ws_update.json               ← websocket update schema
 │
 ├── migrations/
-│   ├── 001_init.sql                 ← schema initialization
-│   └── 002_events.sql               ← event tracking tables
+│   ├── 001_init.sql                 ← devices & shelters schema (PostGIS)
+│   └── 002_events.sql               ← events, device_logs, rescue_flags schema
 │
 ├── scripts/
-│   ├── mock_camara.go               ← local mock CAMARA server (location/reachability/qos)
-│   ├── mock_agent.go                ← local mock AI decision server (zone-aware)
-│   ├── simulate_disaster.go         ← sends fake sensor events for testing
-│   └── seed_shelters.sql            ← populates shelters DB with MENA coordinates
+│   ├── agent/
+│   │   ├── Dockerfile               ← mock AI agent service container
+│   │   └── mock_agent.go            ← zone-aware AI decision mock server
+│   ├── camara/
+│   │   ├── Dockerfile               ← mock CAMARA service container
+│   │   └── mock_camara.go           ← location/reachability/qos mock server
+│   ├── seed/
+│   │   ├── seed_shelters.sql        ← MENA shelter coordinates (geo data)
+│   │   └── seed_devices.sql         ← 40 test phones across red/orange/green zones
+│   └── simulate_disaster.go         ← sends fake sensor events to supervisor
 │
 ├── config/
 │   └── config.go                    ← loads env and exposes typed config
 │
 ├── docs/
-│   ├── CHANGELOGS.md                ← v0.3.0 → v0.3.1 release notes
+│   ├── CHANGELOGS.md                ← v0.3.0 → v0.5.0 release notes
 │   ├── CONTRIBUTING.md              ← contribution guidelines
 │   ├── ERRORDOCS.md                 ← error handling policy
 │   ├── LICENSE
@@ -105,10 +111,13 @@ geodispatch/
 │       ├── testing_prototype.jpeg
 │       └── time_prediction.png
 │
-├── .env.example                     ← mock-first env template
+├── .env                             ← environment configuration (local)
+├── .env.example                     ← environment template
 ├── .gitignore
-├── docker-compose.yml               ← containerization (v0.3.1+)
-├── Dockerfile                       ← supervisor container image
+├── .dockerignore                    ← Docker build context exclusions
+├── docker-compose.yml               ← production Compose (Postgres + Supervisor)
+├── docker-compose.dev.yml           ← full-stack dev Compose (all services + health checks)
+├── Dockerfile                       ← supervisor container image (multi-stage)
 ├── go.mod
 └── go.sum
 ```
@@ -126,12 +135,12 @@ geodispatch/
 | `internal/agent` | AI HTTP client and request/response decoding only |
 | `internal/dispatch` | Executes SMS/rescue actions from AI decisions |
 | `internal/dashboard` | WebSocket hub and real-time message broadcasting to clients |
-| `internal/database` | PostgreSQL connectivity, queries (shelters, devices, logs) |
+| `internal/database` | PostgreSQL connectivity, PostGIS queries (shelters, devices, logs, events) |
 | `internal/sensor` | HTTP request parsing for incoming sensor payloads |
 | `internal/population` | Population data sourcing (devices, affected persons) |
 | `contracts/` | Locked inter-service JSON schema definitions |
-| `migrations/` | Database schema versioning (Flyway-style SQL) |
-| `scripts/` | Local simulation stack (mock CAMARA, mock AI, disaster simulation, data seeding) |
+| `migrations/` | Database schema versioning (SQL migrations) |
+| `scripts/` | Containerized services (mock CAMARA, mock AI, disaster simulator, data seeders) |
 | `config/` | Environment loading, typed config struct, defaults |
 
 ---
@@ -150,10 +159,10 @@ geodispatch/
 
 ## Prerequisites
 
-- Go 1.18+
+- Go 1.22+
+- PostgreSQL 15+ with PostGIS extension
+- Docker & Docker Compose 3.9+
 - Python 3.11+ (for optional real AI agent)
-- PostgreSQL/PostGIS (optional in `DATABASE_URL=mock` mode)
-- Docker & Docker Compose (optional for containerized deployment)
 - CAMARA credentials (optional for local mocks)
 - SMS gateway credentials (optional for local mocks)
 
@@ -175,28 +184,40 @@ go mod tidy
 ### 3. Configure environment
 ```bash
 cp .env.example .env
-# Edit values only if needed — defaults are mock-first
+# Edit values only if needed — defaults point to localhost services
 ```
 
 ---
 
-### Option B: Containerized (v0.3.1+, scaffold mode)
+## Quick Start (Containerized — Recommended)
 
-Docker Compose support is introduced as a scaffold baseline. Currently the `docker-compose.yml` is minimal/intentional to allow incremental service definitions.
+### Full development stack (all services + database)
 
-Future containerization will enable:
+```bash
+# Start everything
+docker-compose -f docker-compose.dev.yml up
+
+# In another terminal, trigger a disaster event
+go run scripts/simulate_disaster.go --event evt-001 --severity 6.8
+```
+
+This boots:
+- PostgreSQL 16 + PostGIS (with automatic seed data)
+- Mock CAMARA server (location/reachability/QoS)
+- Mock AI Agent server (zone-based decisions)
+- Supervisor (ready to receive events on `http://localhost:8080/sensor`)
+
+### Production Compose (Postgres + Supervisor only)
+
 ```bash
 docker-compose up
-# Single command to run supervisor + mocks + optional database
+# Supervisor connects to real DB; external CAMARA/AI expected
 ```
 
 ---
-
-## Production runtime (skeleton)
+## Production runtime
 
 To run the production entrypoint:
-
-First, Add the API_KEY in the .env file
 
 ```bash
 go run cmd/supervisor/main.go
@@ -204,7 +225,8 @@ go run cmd/supervisor/main.go
 
 Current status:
 - pipeline orchestration is in place
-- dispatch/DB/CAMARA contain mock-safe and scaffolded logic
+- full database integration with PostgreSQL + PostGIS
+- real Docker Compose support for reproducible deployments
 - intended for iterative hardening toward full production readiness
 
 ---
@@ -224,7 +246,9 @@ NOKIA_NAC_BASE_URL=https://network-as-code.nokia.rapidapi.com
 MOCK_NOKIA_NAC_BASE_URL=http://localhost:8081
 
 NOKIA_NAC_HOST=network-as-code.nokia.rapidapi.com
-NOKIA_NAC_API_KEY=              # leave empty for mock
+
+# leave empty for mock
+NOKIA_NAC_API_KEY=
 
 # How old (seconds) a cached device location may be (600 = 10 min)
 CAMARA_LOCATION_MAX_AGE_SEC=600
@@ -233,7 +257,7 @@ CAMARA_LOCATION_MAX_AGE_SEC=600
 AGENT_URL=http://localhost:5000/decide
 
 # DATABASE
-DATABASE_URL=postgres://user:pass@localhost:5432/geodispatch
+DATABASE_URL=postgres://geodispatch:geodispatch@localhost:5432/geodispatch
 
 # SMS GATEWAY (Africa's Talking)
 AFRICASTALKING_API_KEY=your_sandbox_key_here
@@ -245,6 +269,25 @@ OLLAMA_URL=http://localhost:11434
 # CONCURRENCY LIMITS
 CAMARA_CONCURRENCY=50
 ```
+
+---
+
+## Database schema
+
+### `devices` table
+Registered phones and their last-known location (populated from seed scripts or CAMARA live lookups).
+
+### `shelters` table
+Fixed disaster shelters with capacity and location (PostGIS geography for accurate distance ordering).
+
+### `events` table
+Top-level disaster event records (one per SensorInput).
+
+### `device_logs` table
+Audit trail: one row per DeviceDecision (phone, zone, action, SMS text, shelter assigned, AI confidence).
+
+### `rescue_flags` table
+Rescue queue: devices flagged for physical intervention, ordered by priority and timestamp.
 
 ---
 
@@ -261,6 +304,12 @@ Primary codes:
 - `SMS_FAILED` — SMS gateway rejection
 - `DB_ERROR` — Database critical failure
 - `QOS_FAILED` — QoS upgrade request failed
+
+---
+
+## Contributing
+
+See `docs/CONTRIBUTING.md` for development guidelines, code standards, and PR workflow.
 
 ---
 
