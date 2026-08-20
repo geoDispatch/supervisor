@@ -317,10 +317,10 @@ See `docs/CONTRIBUTING.md` for development guidelines, code standards, and PR wo
 
 | Person | Role | Owns |
 |---|---|---|
-| ilias | Systems Lead | Go supervisor, CAMARA orchestration, architecture |
-| yassine | AI Engineer | Python agent decision layer |
-| ayoub / saad | Frontend & Dashboard | WebSocket dashboard and live visualization |
-| houssam | DevOps & Integration | Testing, integration, runtime workflows, containerization |
+| [@ilias](https://github.com/iliassovic2003) | Systems Lead | Go supervisor, CAMARA orchestration, architecture |
+| [@yassine](https://github.com/yassinsl) | AI Engineer | Python agent decision layer |
+| [@ayoub](https://github.com/AelElz) / [@saad](https://github.com/saadzaoual) | Frontend & Documentation | WebSocket dashboard and live visualization |
+| [@houssam](https://github.com/macrovvave) | DevOps & Integration | Testing, integration, runtime workflows, containerization |
 
 ---
 
