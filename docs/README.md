@@ -4,7 +4,7 @@ Autonomous crisis dispatcher — detects natural disasters, locates people via C
 
 ## Clarification
 
-This is only the Go-Supervisor server-side part, Other parts will be coded elsewhere.
+This is only the Go-Supervisor server-side part. Other parts will be coded elsewhere.
 
 ## How it works
 
@@ -27,10 +27,8 @@ Go Supervisor — fires SMS/rescue in parallel + streams to gov dashboard via We
 ```text
 geodispatch/
 ├── cmd/
-│   ├── supervisor/
-│   │   └── main.go                  ← production supervisor runtime
-│   └── testing/
-│       └── main.go                  ← local simulation runtime (mock-first)
+│   └── supervisor/
+│       └── main.go                  ← production/mock supervisor runtime
 │
 ├── internal/
 │   ├── models/
@@ -38,17 +36,16 @@ geodispatch/
 │   │
 │   ├── camara/
 │   │   ├── client.go                ← Nokia NaC HTTP client + auth hooks
-│   │   ├── location.go              ← Location Retrieval API helpers
-│   │   ├── reachability.go          ← Device Reachability API helpers
-│   │   ├── geofencing.go            ← Geofencing API helpers
-│   │   ├── qos.go                   ← QoS on Demand helpers
-│   │   ├── congestion.go            ← Congestion insights helpers
-│   │   └── batch.go                 ← CAMARA batch/concurrency orchestration
+│   │   ├── location.go              ← Location Retrieval API
+│   │   ├── reachability.go          ← Device Reachability API
+│   │   ├── qos.go                   ← QoS on Demand API
+│   │   ├── congestion.go            ← Congestion Insights API
+│   │   └── batch.go                 ← semaphore + concurrency orchestration
 │   │
 │   ├── zones/
-│   │   ├── haversine.go             ← distance calculation
+│   │   ├── haversine.go             ← distance calculation (km from epicenter)
 │   │   ├── assign.go                ← red/orange/green assignment logic
-│   │   └── heap.go                  ← distance-priority batching
+│   │   └── heap.go                  ← distance-priority batching + streaming
 │   │
 │   ├── agent/
 │   │   ├── client.go                ← HTTP client that calls Python agent
@@ -67,10 +64,14 @@ geodispatch/
 │   ├── database/
 │   │   ├── postgres.go              ← DB connector (mock mode supported)
 │   │   ├── shelters.go              ← nearest shelter query hooks
+│   │   ├── devices.go               ← device/phone DB operations
 │   │   └── logs.go                  ← alert logs, event history
 │   │
-│   └── sensor/
-│       └── handler.go               ← HTTP parser for incoming sensor POST
+│   ├── sensor/
+│   │   └── handler.go               ← HTTP parser for incoming sensor POST
+│   │
+│   └── population/
+│       └── provider.go              ← population data sourcing helpers
 │
 ├── contracts/
 │   ├── README.md                    ← contract rules for all team members
@@ -80,17 +81,23 @@ geodispatch/
 │   ├── ai_response.json             ← AI → Go response schema
 │   └── ws_update.json               ← websocket update schema
 │
+├── migrations/
+│   ├── 001_init.sql                 ← schema initialization
+│   └── 002_events.sql               ← event tracking tables
+│
 ├── scripts/
 │   ├── mock_camara.go               ← local mock CAMARA server (location/reachability/qos)
-│   ├── mock_agent.go                ← local mock AI decision server
-│   └── simulate_disaster.go         ← sends fake sensor events for testing
+│   ├── mock_agent.go                ← local mock AI decision server (zone-aware)
+│   ├── simulate_disaster.go         ← sends fake sensor events for testing
+│   └── seed_shelters.sql            ← populates shelters DB with MENA coordinates
 │
 ├── config/
 │   └── config.go                    ← loads env and exposes typed config
 │
 ├── docs/
-│   ├── CHANGELOGS.md
-│   ├── ERRORDOCS.md
+│   ├── CHANGELOGS.md                ← v0.3.0 → v0.3.1 release notes
+│   ├── CONTRIBUTING.md              ← contribution guidelines
+│   ├── ERRORDOCS.md                 ← error handling policy
 │   ├── LICENSE
 │   ├── README.md
 │   └── imgs/
@@ -100,6 +107,8 @@ geodispatch/
 │
 ├── .env.example                     ← mock-first env template
 ├── .gitignore
+├── docker-compose.yml               ← containerization (v0.3.1+)
+├── Dockerfile                       ← supervisor container image
 ├── go.mod
 └── go.sum
 ```
@@ -110,19 +119,20 @@ geodispatch/
 
 | Package | Responsibility |
 |---|---|
-| `cmd/supervisor` | Boots the runtime and orchestrates the production pipeline |
-| `cmd/testing` | Runs the same orchestration in local mock mode for rapid validation |
+| `cmd/supervisor` | Boots runtime, orchestrates production pipeline, HTTP routes |
 | `internal/models` | Single source of truth for all contracts, enums, and typed payloads |
-| `internal/camara` | CAMARA API integration layer (location/reachability/qos/geofencing) |
-| `internal/zones` | Pure geo logic + priority ordering (haversine/assign/heap) |
-| `internal/agent` | AI transport and request/response decoding only |
+| `internal/camara` | CAMARA API integration (location, reachability, QoS, congestion, batching) |
+| `internal/zones` | Pure geo logic: haversine distance, zone assignment, priority heap |
+| `internal/agent` | AI HTTP client and request/response decoding only |
 | `internal/dispatch` | Executes SMS/rescue actions from AI decisions |
-| `internal/dashboard` | WebSocket client hub and dashboard message broadcasting |
-| `internal/database` | DB connectivity + query hooks (mock-safe path available) |
-| `internal/sensor` | Sensor input parsing and request boundary validation |
-| `contracts/` | Locked inter-service schema definitions |
-| `scripts/` | Local simulation stack (mock CAMARA, mock AI, fake sensor events) |
-| `config/` | Env config + defaults + concurrency tuning |
+| `internal/dashboard` | WebSocket hub and real-time message broadcasting to clients |
+| `internal/database` | PostgreSQL connectivity, queries (shelters, devices, logs) |
+| `internal/sensor` | HTTP request parsing for incoming sensor payloads |
+| `internal/population` | Population data sourcing (devices, affected persons) |
+| `contracts/` | Locked inter-service JSON schema definitions |
+| `migrations/` | Database schema versioning (Flyway-style SQL) |
+| `scripts/` | Local simulation stack (mock CAMARA, mock AI, disaster simulation, data seeding) |
+| `config/` | Environment loading, typed config struct, defaults |
 
 ---
 
@@ -143,6 +153,7 @@ geodispatch/
 - Go 1.18+
 - Python 3.11+ (for optional real AI agent)
 - PostgreSQL/PostGIS (optional in `DATABASE_URL=mock` mode)
+- Docker & Docker Compose (optional for containerized deployment)
 - CAMARA credentials (optional for local mocks)
 - SMS gateway credentials (optional for local mocks)
 
@@ -169,38 +180,23 @@ cp .env.example .env
 
 ---
 
-## Local simulation (recommended for current phase)
+### Option B: Containerized (v0.3.1+, scaffold mode)
 
-### Terminal A — start mock CAMARA
+Docker Compose support is introduced as a scaffold baseline. Currently the `docker-compose.yml` is minimal/intentional to allow incremental service definitions.
+
+Future containerization will enable:
 ```bash
-go run scripts/mock_camara.go
+docker-compose up
+# Single command to run supervisor + mocks + optional database
 ```
-
-### Terminal B — start mock AI agent
-```bash
-go run scripts/mock_agent.go
-```
-
-### Terminal C — start supervisor in testing mode
-```bash
-go run cmd/testing/main.go
-```
-
-### Terminal D — trigger a disaster event
-```bash
-go run scripts/simulate_disaster.go --type earthquake --magnitude 6.8 --lat 33.5731 --lng -7.5898
-```
-
-You should see:
-- per-batch device decision tables in terminal output
-- zone summaries and narrative pushes
-- websocket updates on `/ws`
 
 ---
 
 ## Production runtime (skeleton)
 
 To run the production entrypoint:
+
+First, Add the API_KEY in the .env file
 
 ```bash
 go run cmd/supervisor/main.go
@@ -216,47 +212,39 @@ Current status:
 ## Environment variables
 
 ```env
-# Server
+# SERVER CONFIGURATION
 SERVER_PORT=8080
 
-# Mock services (local)
+# MOCK SERVER PORTS (Local Testing)
 MOCK_CAMARA_PORT=8081
 MOCK_AGENT_PORT=5000
 
-# External service URLs (point to mocks by default)
-NOKIA_NAC_BASE_URL=http://localhost:8081
-NOKIA_NAC_TOKEN=mock_token_for_testing
+# NOKIA NETWORK AS CODE — CAMARA
+NOKIA_NAC_BASE_URL=https://network-as-code.nokia.rapidapi.com
+MOCK_NOKIA_NAC_BASE_URL=http://localhost:8081
+
+NOKIA_NAC_HOST=network-as-code.nokia.rapidapi.com
+NOKIA_NAC_API_KEY=              # leave empty for mock
+
+# How old (seconds) a cached device location may be (600 = 10 min)
+CAMARA_LOCATION_MAX_AGE_SEC=600
+
+# AI AGENT
 AGENT_URL=http://localhost:5000/decide
 
-# Database
-DATABASE_URL=mock
+# DATABASE
+DATABASE_URL=postgres://user:pass@localhost:5432/geodispatch
 
-# SMS Gateway
+# SMS GATEWAY (Africa's Talking)
 AFRICASTALKING_API_KEY=your_sandbox_key_here
 AFRICASTALKING_USERNAME=sandbox
 
-# Local services
+# LOCAL SERVICES
 OLLAMA_URL=http://localhost:11434
 
-# Concurrency
+# CONCURRENCY LIMITS
 CAMARA_CONCURRENCY=50
-SMS_CONCURRENCY=100
 ```
-
----
-
-## Data contracts
-
-All inter-service communication is defined under `contracts/`:
-
-- `sensor_input.json`
-- `camara_device.json`
-- `ai_request.json`
-- `ai_response.json`
-- `ws_update.json`
-
-Notable contract update:
-- `nearest_shelter` → `nearest_shelters` in AI request schema (array, up to 3).
 
 ---
 
@@ -264,25 +252,15 @@ Notable contract update:
 
 Error semantics are centralized in:
 
-- `docs/ERRORDOCS.md`
-- typed codes in `internal/models/models.go` (`ErrorCode`)
+- `docs/ERRORDOCS.md` — error handling policy and escalation rules
+- typed codes in `internal/models/models.go` (`ErrorCode` constants)
 
 Primary codes:
-- `CAMARA_TIMEOUT`
-- `AGENT_ERROR`
-- `SMS_FAILED`
-- `DB_ERROR`
-- `QOS_FAILED`
-
----
-
-## Changelog
-
-Detailed release history:
-- `docs/CHANGELOGS.md`
-
-Latest tracked version:
-- **v0.3.0** (mock-driven end-to-end simulation + pipeline expansion)
+- `CAMARA_TIMEOUT` — Nokia NaC API timeout or failure
+- `AGENT_ERROR` — Python AI agent crash or invalid response
+- `SMS_FAILED` — SMS gateway rejection
+- `DB_ERROR` — Database critical failure
+- `QOS_FAILED` — QoS upgrade request failed
 
 ---
 
@@ -293,7 +271,7 @@ Latest tracked version:
 | ilias | Systems Lead | Go supervisor, CAMARA orchestration, architecture |
 | yassine | AI Engineer | Python agent decision layer |
 | ayoub / saad | Frontend & Dashboard | WebSocket dashboard and live visualization |
-| houssam | DevOps & Integration | Testing, integration, runtime workflows |
+| houssam | DevOps & Integration | Testing, integration, runtime workflows, containerization |
 
 ---
 
