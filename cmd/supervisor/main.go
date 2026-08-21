@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"sort"
 
 	"github.com/geodispatch/supervisor/config"
 	"github.com/geodispatch/supervisor/internal/agent"
@@ -242,6 +243,7 @@ func runPipeline(
 		congestionLevel models.CongestionLevel
 		wgAreaCalls     sync.WaitGroup
 	)
+
 	wgAreaCalls.Add(3)
 
 	// A — QoS on Demand
@@ -249,6 +251,12 @@ func runPipeline(
 		defer wgAreaCalls.Done()
 		status, err := camara.RequestQoS(ctx, cfg, input.Epicenter)
 		if err != nil {
+			log.Printf("[%s] QoS request failed: %v", models.ErrQoSFailed, err)
+			hub.BroadcastError(models.ErrorUpdate{
+				Code:    models.ErrQoSFailed,
+				Message: err.Error(),
+				Fatal:   false,
+			}, input.EventID)
 			networkStatus = models.NetworkStatus{QoSStatus: models.QoSFailed}
 			return
 		}
@@ -259,19 +267,33 @@ func runPipeline(
 	go func() {
 		defer wgAreaCalls.Done()
 		shelters, err := db.NearestShelters(ctx, input.Epicenter, 3)
-		if err != nil || len(shelters) == 0 {
-			log.Printf("[T+%dms] shelter query failed or empty: %v", elapsedMS(tBoot), err)
+		if err != nil {
+			log.Printf("[%s] shelter query failed: %v", models.ErrDBError, err)
+			hub.BroadcastError(models.ErrorUpdate{
+				Code:    models.ErrDBError,
+				Message: fmt.Sprintf("shelter query failed: %v", err),
+				Fatal:   true,
+			}, input.EventID)
 			return
+		}
+		if len(shelters) == 0 {
+			log.Printf("[%s] shelter query returned no results", models.ErrDBError)
 		}
 		nearestShelters = shelters
 	}()
 
-	// C — congestion insights  ← ADD THIS BLOCK
+	// C — congestion insights
 	go func() {
 		defer wgAreaCalls.Done()
 		level, err := camara.GetCongestion(ctx, cfg, input.Epicenter)
 		if err != nil {
-			log.Printf("[T+%dms] congestion query failed: %v", elapsedMS(tBoot), err)
+			log.Printf("[%s] congestion query failed: %v", models.ErrCAMARATimeout, err)
+			hub.BroadcastError(models.ErrorUpdate{
+				Code:    models.ErrCAMARATimeout,
+				Message: fmt.Sprintf("congestion insight failed: %v", err),
+				Phone:   "",
+				Fatal:   false,
+			}, input.EventID)
 			congestionLevel = models.CongestionUnknown
 			return
 		}
@@ -281,37 +303,34 @@ func runPipeline(
 	wgAreaCalls.Wait()
 	networkStatus.CongestionLevel = congestionLevel
 
-	// D — fetch phones from DB sorted by distance to epicenter
+	// D — fetch phones from DB
 	phones, err := db.PhonesNearEpicenter(ctx, input.Epicenter, input.RadiusKm)
-	if err != nil || len(phones) == 0 {
-		log.Printf("[T+%dms] no phones found near epicenter: %v", elapsedMS(tBoot), err)
+	if err != nil {
+		log.Printf("[%s] phone lookup failed: %v", models.ErrDBError, err)
+		hub.BroadcastError(models.ErrorUpdate{
+			Code:    models.ErrDBError,
+			Message: fmt.Sprintf("phone lookup failed: %v", err),
+			Fatal:   true,
+		}, input.EventID)
 		return
 	}
+	if len(phones) == 0 {
+		log.Printf("[%s] no phones found near epicenter (radius=%.1fkm)", models.ErrDBError, input.RadiusKm)
+		return
+	}
+	log.Printf("[pipeline] %d phones found within %.1fkm of epicenter", len(phones), input.RadiusKm)
+
+	var (
+		allDevices []models.TriagedDevice
+		wgDevices  sync.WaitGroup
+	)
 
 	timingMap := make(map[string]*deviceTiming)
 	distMap   := make(map[string]float64)
-	var mu sync.Mutex 
-
-	heap := zones.NewMinHeap()
-	batchCh := make(chan []models.TriagedDevice, 20)
-
-	var wgDevices sync.WaitGroup
+	var mu sync.Mutex
 
 	const camaraMaxConcurrent = 50
 	sem := make(chan struct{}, camaraMaxConcurrent)
-
-	go func() {
-		const batchSize = 20
-		for range heap.Stream() {
-			for heap.Len() >= batchSize {
-				batchCh <- heap.PopN(batchSize)
-			}
-		}
-		if remaining := heap.PopAll(); len(remaining) > 0 {
-			batchCh <- remaining
-		}
-		close(batchCh)
-	}()
 
 	for _, phone := range phones {
 		wgDevices.Add(1)
@@ -327,26 +346,40 @@ func runPipeline(
 				reach *models.CAMARAReachabilityResponse
 				wgDev sync.WaitGroup
 			)
-			wgDev.Add(2)
 
+			wgDev.Add(2)
 			go func() {
 				defer wgDev.Done()
 				l, err := camara.GetLocation(ctx, cfg, p)
 				if err != nil {
+					log.Printf("[%s] location lookup failed phone=%s: %v", models.ErrCAMARATimeout, p, err)
+					hub.BroadcastError(models.ErrorUpdate{
+						Code:    models.ErrCAMARATimeout,
+						Message: fmt.Sprintf("location lookup failed: %v", err),
+						Phone:   p,
+						Fatal:   false,
+					}, input.EventID)
 					return
 				}
 				loc = l
 			}()
-
 			go func() {
 				defer wgDev.Done()
 				re, err := camara.GetReachability(ctx, cfg, p)
 				if err != nil {
+					log.Printf("[%s] reachability lookup failed phone=%s: %v", models.ErrCAMARATimeout, p, err)
+					hub.BroadcastError(models.ErrorUpdate{
+						Code:    models.ErrCAMARATimeout,
+						Message: fmt.Sprintf("reachability lookup failed: %v", err),
+						Phone:   p,
+						Fatal:   false,
+					}, input.EventID)
 					return
 				}
 				reach = re
 			}()
 			wgDev.Wait()
+
 			tCAMARADone := time.Now()
 
 			if loc == nil || reach == nil {
@@ -363,9 +396,7 @@ func runPipeline(
 				tCAMARAStart: tCAMARAStart,
 				tCAMARADone:  tCAMARADone,
 			}
-			mu.Unlock()
-
-			device := models.TriagedDevice{
+			allDevices = append(allDevices, models.TriagedDevice{
 				Phone:              p,
 				Latitude:           loc.Area.Center.Lat,
 				Longitude:          loc.Area.Center.Lng,
@@ -375,13 +406,13 @@ func runPipeline(
 				LastStatusTime:     reach.LastStatusTime,
 				Zone:               zone,
 				DistanceKm:         distKm,
-			}
-			heap.Push(device)
+			})
+			mu.Unlock()
 
 			hub.BroadcastDeviceUpdate(models.DeviceUpdate{
 				Phone:     p,
-				Latitude:  device.Latitude,
-				Longitude: device.Longitude,
+				Latitude:  loc.Area.Center.Lat,
+				Longitude: loc.Area.Center.Lng,
 				Zone:      zone,
 				Reachable: reach.ReachabilityStatus != models.NotConnected,
 			}, input.EventID)
@@ -389,7 +420,24 @@ func runPipeline(
 	}
 
 	wgDevices.Wait()
-	heap.Close()
+	log.Printf("[pipeline] %d/%d devices triaged successfully", len(allDevices), len(phones))
+
+	sort.Slice(allDevices, func(i, j int) bool {
+		return allDevices[i].DistanceKm < allDevices[j].DistanceKm
+	})
+
+	const batchSize = 20
+	batchCh := make(chan []models.TriagedDevice, 20)
+	go func() {
+		for i := 0; i < len(allDevices); i += batchSize {
+			end := i + batchSize
+			if end > len(allDevices) {
+				end = len(allDevices)
+			}
+			batchCh <- allDevices[i:end]
+		}
+		close(batchCh)
+	}()
 
 	agentClient := agent.NewClient(cfg.AgentURL)
 	batchIdx := 0
@@ -397,7 +445,6 @@ func runPipeline(
 
 	for batch := range batchCh {
 		tAgentSent := time.Now()
-
 		req := models.AgentRequest{
 			EventID:         input.EventID,
 			DisasterType:    input.DisasterType,
@@ -413,10 +460,11 @@ func runPipeline(
 
 		resp, err := agentClient.Decide(ctx, req)
 		if err != nil {
-			log.Printf("[ERROR] AI agent batch %d: %v", batchIdx, err)
+			log.Printf("[%s] agent decision failed batch=%d: %v", models.ErrAgentError, batchIdx, err)
 			hub.BroadcastError(models.ErrorUpdate{
 				Code:    models.ErrAgentError,
-				Message: err.Error(),
+				Message: fmt.Sprintf("batch %d: %v", batchIdx, err),
+				Phone:   "",
 				Fatal:   false,
 			}, input.EventID)
 			batchIdx++
@@ -425,7 +473,6 @@ func runPipeline(
 
 		tAgentReceived := time.Now()
 
-		// stamp agent times on every device in this batch
 		for _, dev := range batch {
 			mu.Lock()
 			if t, ok := timingMap[dev.Phone]; ok {
@@ -435,24 +482,39 @@ func runPipeline(
 			mu.Unlock()
 		}
 
-		// ── dispatch: SMS + rescue — collect results ──────────────────────
 		results := make([]deviceResult, len(resp.Decisions))
-
 		var wgDispatch sync.WaitGroup
+
 		for i, decision := range resp.Decisions {
 			wgDispatch.Add(1)
 			go func(idx int, d models.DeviceDecision) {
 				defer wgDispatch.Done()
 
 				if d.Action == models.ActionSMS || d.Action == models.ActionBoth {
-					dispatch.SendSMS(ctx, cfg, d.Phone, d.SMSMessage)
+					if err := dispatch.SendSMS(ctx, cfg, d.Phone, d.SMSMessage); err != nil {
+						log.Printf("[%s] SMS failed phone=%s: %v", models.ErrSMSFailed, d.Phone, err)
+						hub.BroadcastError(models.ErrorUpdate{
+							Code:    models.ErrSMSFailed,
+							Message: fmt.Sprintf("SMS failed: %v", err),
+							Phone:   d.Phone,
+							Fatal:   false,
+						}, input.EventID)
+					}
 				}
 
 				tSMSSent := time.Now()
 
 				if d.Action == models.ActionRescue || d.Action == models.ActionBoth {
 					if db != nil {
-						dispatch.FlagRescue(ctx, db, d, input.EventID)
+						if err := dispatch.FlagRescue(ctx, db, d, input.EventID); err != nil {
+							log.Printf("[%s] rescue flag failed phone=%s: %v", models.ErrDBError, d.Phone, err)
+							hub.BroadcastError(models.ErrorUpdate{
+								Code:    models.ErrDBError,
+								Message: fmt.Sprintf("rescue flag failed: %v", err),
+								Phone:   d.Phone,
+								Fatal:   false,
+							}, input.EventID)
+						}
 					}
 				}
 
@@ -478,16 +540,23 @@ func runPipeline(
 					SMSSent:    d.Action == models.ActionSMS || d.Action == models.ActionBoth,
 					RescueFlag: d.Action == models.ActionRescue || d.Action == models.ActionBoth,
 				}, input.EventID)
-				
 			}(i, decision)
 		}
-		wgDispatch.Wait()
 
-		// ── print everything sequentially after all goroutines done ───────
+		wgDispatch.Wait()
 		printBatchTable(batchIdx, results, time.Since(tAgentSent))
 
 		if resp.RequestQoS {
-			go camara.UpgradeQoS(ctx, cfg, input.Epicenter)
+			go func() {
+				if err := camara.UpgradeQoS(ctx, cfg, input.Epicenter); err != nil {
+					log.Printf("[%s] QoS upgrade failed: %v", models.ErrQoSFailed, err)
+					hub.BroadcastError(models.ErrorUpdate{
+						Code:    models.ErrQoSFailed,
+						Message: fmt.Sprintf("QoS upgrade failed: %v", err),
+						Fatal:   false,
+					}, input.EventID)
+				}
+			}()
 		}
 
 		hub.BroadcastZoneSummary(zoneSummary, input.EventID)
@@ -495,7 +564,6 @@ func runPipeline(
 		batchIdx++
 	}
 
-	// ── pipeline complete banner ──────────────────────────────────────────
 	total := time.Since(tEvent)
 	banner = strings.Repeat("━", 68)
 	fmt.Printf("\n┏%s┓\n", banner)

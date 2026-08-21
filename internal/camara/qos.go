@@ -64,12 +64,13 @@ func UpgradeQoS(
 	ctx context.Context,
 	cfg *config.Config,
 	epicenter models.Coordinates,
-) {
+) error {
 	if cfg.IsReal() {
-		upgradeQoSReal(ctx, cfg, epicenter)
-		return
-	}
-	upgradeQoSMock(epicenter, cfg)
+        upgradeQoSReal(ctx, cfg, epicenter)
+        return nil
+    }
+    upgradeQoSMock(epicenter, cfg)
+    return nil
 }
 
 func requestQoSReal(
