@@ -217,6 +217,46 @@
       - Created `scripts/seed/` directory for SQL seeding scripts
       - Reorganized script structure to support per-service Dockerfiles
 
+────────────────────────────────────────────────────────────────
+  v0.5.2 => v0.6.0                                      [MINOR]
+────────────────────────────────────────────────────────────────
+  + Enhanced error handling and real-time broadcasting
+      - Implemented comprehensive `ErrorUpdate` webhooks across entire pipeline
+      - All critical operations now capture and broadcast errors to dashboard
+      - Error severity classification:
+          Fatal errors: DB_ERROR (database failures)
+          Non-fatal errors: CAMARA_TIMEOUT, QOS_FAILED, SMS_FAILED, AGENT_ERROR
+      - Added phone context to error broadcasts for targeted troubleshooting
+      - Real-time error visibility on government dashboard
+
+  + Device processing pipeline refactored for determinism
+      - Replaced MinHeap concurrent streaming with deterministic slice-based approach
+      - New flow: collect all devices → sort by distance → batch → process
+      - Eliminates race conditions from concurrent heap mutations
+      - Cleaner batch generation logic using simple slice slicing
+      - Improved stability in high-device-count scenarios
+
+  · Critical operation error handling
+      - `camara.UpgradeQoS()` now returns error (signature changed)
+      - `dispatch.SendSMS()` errors now captured and broadcast
+      - `dispatch.FlagRescue()` errors now captured and broadcast
+      - Location/Reachability lookups include phone context in error logs
+      - Prevents silent failures in dispatch phase
+
+  · Environment configuration hardened for Docker Compose
+      - `.env.example` now reflects production-ready Docker networking
+      - Eliminates localhost binding issues in containerized environments
+
+  / Code quality and logging consistency
+      - Standardized error log format: log.Printf("[ErrorCode] message: %v", err)
+      - Removed timing-based telemetry (T+Nms references)
+      - Added readability newlines in concurrent/sync blocks
+      - Improved log consistency across pipeline stages
+
+  / Docker Compose maintenance
+      - Removed version: "3.9" declarations (implicit in Docker Compose v2+)
+      - Keeps Compose files forward-compatible with latest tooling
+
 ════════════════════════════════════════════════════════════════
                         CURRENT RELEASE
 ════════════════════════════════════════════════════════════════

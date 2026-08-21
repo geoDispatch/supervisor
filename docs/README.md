@@ -243,7 +243,7 @@ MOCK_AGENT_PORT=5000
 
 # NOKIA NETWORK AS CODE — CAMARA
 NOKIA_NAC_BASE_URL=https://network-as-code.nokia.rapidapi.com
-MOCK_NOKIA_NAC_BASE_URL=http://localhost:8081
+MOCK_NOKIA_NAC_BASE_URL=http://mock_camara:8081
 
 NOKIA_NAC_HOST=network-as-code.nokia.rapidapi.com
 
@@ -254,10 +254,10 @@ NOKIA_NAC_API_KEY=
 CAMARA_LOCATION_MAX_AGE_SEC=600
 
 # AI AGENT
-AGENT_URL=http://localhost:5000/decide
+AGENT_URL=http://mock_agent:5000/decide
 
 # DATABASE
-DATABASE_URL=postgres://geodispatch:geodispatch@localhost:5432/geodispatch
+DATABASE_URL="postgres://geodispatch:geodispatch@postgres:5432/geodispatch?sslmode=disable"
 
 # SMS GATEWAY (Africa's Talking)
 AFRICASTALKING_API_KEY=your_sandbox_key_here
