@@ -237,6 +237,22 @@ func runPipeline(
 	ctx := context.Background()
 	hub.BroadcastEventStart(input)
 
+	phones, err := db.PhonesNearEpicenter(ctx, input.Epicenter, input.RadiusKm)
+	if err != nil {
+		log.Printf("[%s] phone lookup failed: %v", models.ErrDBError, err)
+		hub.BroadcastError(models.ErrorUpdate{
+			Code:    models.ErrDBError,
+			Message: fmt.Sprintf("phone lookup failed: %v", err),
+			Fatal:   true,
+		}, input.EventID)
+		return
+	}
+	if len(phones) == 0 {
+		log.Printf("[%s] no phones found near epicenter (radius=%.1fkm)", models.ErrDBError, input.RadiusKm)
+		return
+	}
+	log.Printf("[pipeline] %d phones found within %.1fkm of epicenter", len(phones), input.RadiusKm)
+
 	var (
 		nearestShelters []models.Shelter
 		networkStatus   models.NetworkStatus
@@ -285,7 +301,7 @@ func runPipeline(
 	// C — congestion insights
 	go func() {
 		defer wgAreaCalls.Done()
-		level, err := camara.GetCongestion(ctx, cfg, input.Epicenter)
+		level, err := camara.GetCongestion(ctx, cfg, input.Epicenter, phones[0])
 		if err != nil {
 			log.Printf("[%s] congestion query failed: %v", models.ErrCAMARATimeout, err)
 			hub.BroadcastError(models.ErrorUpdate{
@@ -302,24 +318,7 @@ func runPipeline(
 
 	wgAreaCalls.Wait()
 	networkStatus.CongestionLevel = congestionLevel
-
-	// D — fetch phones from DB
-	phones, err := db.PhonesNearEpicenter(ctx, input.Epicenter, input.RadiusKm)
-	if err != nil {
-		log.Printf("[%s] phone lookup failed: %v", models.ErrDBError, err)
-		hub.BroadcastError(models.ErrorUpdate{
-			Code:    models.ErrDBError,
-			Message: fmt.Sprintf("phone lookup failed: %v", err),
-			Fatal:   true,
-		}, input.EventID)
-		return
-	}
-	if len(phones) == 0 {
-		log.Printf("[%s] no phones found near epicenter (radius=%.1fkm)", models.ErrDBError, input.RadiusKm)
-		return
-	}
-	log.Printf("[pipeline] %d phones found within %.1fkm of epicenter", len(phones), input.RadiusKm)
-
+	
 	var (
 		allDevices []models.TriagedDevice
 		wgDevices  sync.WaitGroup

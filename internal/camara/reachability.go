@@ -27,25 +27,17 @@ type reachabilityRequest struct {
 }
 
 func getRealReachability(ctx context.Context, cfg *config.Config, phone string) (*models.CAMARAReachabilityResponse, error) {
-	token, err := fetchClientCredentialsToken(ctx, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("reachability auth: %w", err)
-	}
-
 	var body reachabilityRequest
 	body.Device.PhoneNumber = normalisePhone(phone)
 	bodyBytes, _ := json.Marshal(body)
 
-	reqURL := fmt.Sprintf("%s/device-status/v0/retrieve", cfg.NokiaNacBaseURL)
+	reqURL := fmt.Sprintf("%s/device-status/device-reachability-status/v1/retrieve", cfg.NokiaNacBaseURL)	
+	
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("build reachability request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("x-rapidapi-key", cfg.NokiaNacAPIKey)
-	req.Header.Set("x-rapidapi-host", cfg.NokiaNacHost)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
+	rapidAPIHeaders(req, cfg)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -58,10 +50,7 @@ func getRealReachability(ctx context.Context, cfg *config.Config, phone string) 
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusUnauthorized:
-		locTokenCache.mu.Lock()
-		locTokenCache.token = ""
-		locTokenCache.mu.Unlock()
-		return nil, fmt.Errorf("reachability 401 – token invalidated: %s", raw)
+		return nil, fmt.Errorf("reachability 401 – invalid API key: %s", raw)
 	case http.StatusNotFound:
 		return nil, fmt.Errorf("reachability 404 – device unknown: %s", raw)
 	default:

@@ -25,6 +25,9 @@ type Config struct {
 	QoSProfileUpgrade      string
 	QoSSessionDuration     int
 	QoSExtendDuration      int
+
+	CongestionWebhookURL   string
+	CongestionWebhookToken string
 }
 
 func Load() *Config {
@@ -48,6 +51,9 @@ func Load() *Config {
 		QoSProfileUpgrade:      getEnv("QOS_PROFILE_UPGRADE", "QOS_L"),
 		QoSSessionDuration:     intEnv("QOS_SESSION_DURATION_SEC", 7200),
 		QoSExtendDuration:      intEnv("QOS_EXTEND_DURATION_SEC", 3600),
+
+		CongestionWebhookURL:   os.Getenv("CONGESTION_WEBHOOK_URL"),
+		CongestionWebhookToken: os.Getenv("CONGESTION_WEBHOOK_TOKEN"),
 	}
 }
 
