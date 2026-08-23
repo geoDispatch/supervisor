@@ -257,14 +257,78 @@
       - Removed version: "3.9" declarations (implicit in Docker Compose v2+)
       - Keeps Compose files forward-compatible with latest tooling
 
+────────────────────────────────────────────────────────────────
+  v0.6.1 => v0.7.0                                      [MAJOR]
+────────────────────────────────────────────────────────────────
+  + CAMARA congestion orchestration redesigned (subscription-based flow)
+      - Reworked `internal/camara/congestion.go` to use:
+          create subscription → fetch congestion → cleanup subscription
+      - Added explicit subscription payload with:
+          `device.phoneNumber`
+          `webhook.notificationUrl`
+          `webhook.notificationAuthToken`
+          `subscriptionExpireTime`
+      - Added deferred best-effort subscription deletion after congestion fetch
+      - Added graceful 429 handling in congestion fetch path (returns unknown instead of hard-failing)
+      - Updated congestion retrieval call in pipeline to include device context (`phones[0]`)
+
+  + Congestion webhook configuration introduced
+      - Extended `config/config.go` with:
+          `CongestionWebhookURL`
+          `CongestionWebhookToken`
+      - Wired new env vars:
+          `CONGESTION_WEBHOOK_URL`
+          `CONGESTION_WEBHOOK_TOKEN`
+
+  + Pipeline execution order hardened in supervisor runtime
+      - Moved device lookup (`PhonesNearEpicenter`) earlier in `cmd/supervisor/main.go`
+      - Added early fatal handling for DB lookup failures before downstream CAMARA fan-out
+      - Added early stop when no phones are found near epicenter
+      - Improves determinism by ensuring downstream stages only run with a valid target set
+
+  · CAMARA auth/header strategy simplified across services
+      - Removed client-credentials token dependency from:
+          `internal/camara/location.go`
+          `internal/camara/reachability.go`
+          `internal/camara/qos.go`
+      - Introduced shared `rapidAPIHeaders(req, cfg)` helper
+      - Standardized Accept/Content-Type + RapidAPI headers in one place
+      - Unauthorized responses now reported as invalid API key errors (clearer operational signal)
+
+  · Endpoint and request-path alignment updates
+      - Updated reachability endpoint to:
+          `/device-status/device-reachability-status/v1/retrieve`
+      - Adjusted congestion request path from retrieve-style flow to fetch/subscription flow
+      - Normalized CAMARA request construction and error wording for consistency
+
+  + Simulation tooling expansion
+      - Added `scripts/simulation/simulate_disaster_camara.go`
+      - New simulator supports CLI flags (`--host`, `--event`, `--severity`)
+      - Prints structured payload + response timing to speed local/operator testing
+      - Added clearer accepted/error terminal feedback for pipeline observation
+      - Renamed simulation asset:
+          `scripts/simulation/simulate_disaster_morocco.go` (renamed in this release set)
+
+  · Seed data profile refreshed for test geography
+      - Reworked `scripts/seed/seed_devices.sql` with a new 40-device dataset
+      - New coordinates are centered around Budapest-style test zones:
+          RED (~0-5km), ORANGE (~5-10km), GREEN (~10-15km)
+      - Preserved previous dataset as commented historical reference block
+
+  / Internal refactor and codebase cleanup
+      - Consolidated helper utilities in CAMARA modules (phone normalization + header utilities)
+      - Reduced duplicated request header/auth code paths
+      - Applied formatting/readability cleanup across QoS and CAMARA call sites
+      - Improved maintainability for subsequent real-network integration iterations
+
 ════════════════════════════════════════════════════════════════
                         CURRENT RELEASE
 ════════════════════════════════════════════════════════════════
 
-  BUILD STATUS:     ⚠️ FOUNDATION PHASE (SKELETON IN PLACE)
-  VERSION:          v0.5.0
-  RELEASE DATE:     August 21, 2026
-  FOCUS:            Pipeline tests
+  BUILD STATUS:     ⚠️ INTEGRATION PHASE (CAMARA REAL-FLOW HARDENING)
+  VERSION:          v0.7.0
+  RELEASE DATE:     August 22, 2026
+  FOCUS:            Congestion subscription flow + pipeline reliability
 
 ════════════════════════════════════════════════════════════════
   Legend:  + Added          · Changed             / Fixed
