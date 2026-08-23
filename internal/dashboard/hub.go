@@ -6,22 +6,39 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/gorilla/websocket"
 	"github.com/geodispatch/supervisor/internal/models"
+	"github.com/gorilla/websocket"
 )
 
 var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 
 type Hub struct {
-	clients map[*websocket.Conn]bool
-	mu      sync.RWMutex
+	clients    map[*websocket.Conn]bool
+	mu         sync.Mutex
+	msgCh      chan []byte
 }
 
 func NewHub() *Hub {
-	return &Hub{clients: make(map[*websocket.Conn]bool)}
+	return &Hub{
+		clients: make(map[*websocket.Conn]bool),
+		msgCh:   make(chan []byte, 512),
+	}
 }
 
-func (h *Hub) Run() {}
+// Run serializes all writes through a single goroutine — gorilla/websocket
+// does not support concurrent writes so this is the correct pattern.
+func (h *Hub) Run() {
+	for msg := range h.msgCh {
+		h.mu.Lock()
+		for conn := range h.clients {
+			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				delete(h.clients, conn)
+				conn.Close()
+			}
+		}
+		h.mu.Unlock()
+	}
+}
 
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -32,13 +49,13 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	h.clients[conn] = true
 	h.mu.Unlock()
-	
 
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			break
 		}
 	}
+
 	h.mu.Lock()
 	delete(h.clients, conn)
 	h.mu.Unlock()
@@ -46,27 +63,30 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Hub) broadcast(msgType string, payload interface{}, eventID string, timestamp int64) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	data, _ := json.Marshal(map[string]interface{}{
+	data, err := json.Marshal(map[string]interface{}{
 		"type":      msgType,
 		"event_id":  eventID,
 		"timestamp": timestamp,
 		"payload":   payload,
 	})
-
-	for conn := range h.clients {
-		conn.WriteMessage(websocket.TextMessage, data)
+	if err != nil {
+		return
+	}
+	select {
+	case h.msgCh <- data:
+	default:
+		// drop if channel full — never block the pipeline
 	}
 }
 
-// Broadcast wrappers matching main.go calls
 func (h *Hub) BroadcastEventStart(input *models.SensorInput) {
 	h.broadcast("event_start", models.EventStart{
-		DisasterType: input.DisasterType, Severity: input.Severity,
-		Epicenter: input.Epicenter, RadiusKm: input.RadiusKm,
-		TsunamiRisk: input.TsunamiRisk, AftershockRisk: input.AftershockRisk,
+		DisasterType:   string(input.DisasterType),
+		Severity:       input.Severity,
+		Epicenter:      input.Epicenter,
+		RadiusKm:       input.RadiusKm,
+		TsunamiRisk:    input.TsunamiRisk,
+		AftershockRisk: string(input.AftershockRisk),
 	}, input.EventID, input.Timestamp)
 }
 
@@ -83,5 +103,8 @@ func (h *Hub) BroadcastZoneSummary(summary models.ZoneSummary, eventID string) {
 }
 
 func (h *Hub) BroadcastNarrative(zone models.ZoneType, narrative, eventID string) {
-	h.broadcast("narrative_update", map[string]string{"zone": string(zone), "narrative": narrative}, eventID, 0)
+	h.broadcast("narrative_update", map[string]string{
+		"zone":      string(zone),
+		"narrative": narrative,
+	}, eventID, 0)
 }

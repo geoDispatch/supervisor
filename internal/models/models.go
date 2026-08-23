@@ -7,8 +7,8 @@ package models
 import "encoding/json"
 
 type Coordinates struct {
-    Lat float64 `json:"latitude"`
-    Lng float64 `json:"longitude"`
+	Lat float64 `json:"latitude"`
+	Lng float64 `json:"longitude"`
 }
 
 // ── Disaster Types ────────────────────────────────────────────
@@ -252,35 +252,35 @@ const (
 
 // Payload when Type = "event_start"
 type EventStart struct {
-    DisasterType   DisasterType 	`json:"disaster_type"`
-    Severity       float64      	`json:"severity"`
-    Epicenter      Coordinates  	`json:"epicenter"`
-    RadiusKm       float64      	`json:"radius_km"`
-    TsunamiRisk    bool         	`json:"tsunami_risk"`
-    AftershockRisk AftershockRisk 	`json:"aftershock_risk"`
+	DisasterType   string      `json:"disaster_type"`
+	Severity       float64     `json:"severity"`
+	Epicenter      Coordinates `json:"epicenter"`
+	RadiusKm       float64     `json:"radius_km"`
+	TsunamiRisk    bool        `json:"tsunami_risk"`
+	AftershockRisk string      `json:"aftershock_risk"`
 }
 
 // Payload when Type = "device_update"
 // One message per device as data streams in
 type DeviceUpdate struct {
-	Phone      string     `json:"phone"`
-	Latitude   float64    `json:"latitude"`
-	Longitude  float64    `json:"longitude"`
-	Zone       ZoneType   `json:"zone"`
-	Reachable  bool       `json:"reachable"`
-	SMSSent    bool       `json:"sms_sent"`
-	RescueFlag bool       `json:"rescue_flag"`
+	Phone      string   `json:"phone"`
+	Latitude   float64  `json:"latitude"`
+	Longitude  float64  `json:"longitude"`
+	Zone       ZoneType `json:"zone"`
+	Reachable  bool     `json:"reachable"`
+	SMSSent    bool     `json:"sms_sent"`
+	RescueFlag bool     `json:"rescue_flag"`
 }
 
 // Payload when Type = "zone_summary"
 // Sidebar counters — sent after each zone batch completes
 type ZoneSummary struct {
-	RedTotal     int `json:"red_total"`
-	RedReachable int `json:"red_reachable"`
-	RedRescue    int `json:"red_rescue"`
-	OrangeTotal  int `json:"orange_total"`
+	RedTotal       int `json:"red_total"`
+	RedReachable   int `json:"red_reachable"`
+	RedRescue      int `json:"red_rescue"`
+	OrangeTotal    int `json:"orange_total"`
 	OrangeReachable int `json:"orange_reachable"`
-	GreenTotal   int `json:"green_total"`
+	GreenTotal     int `json:"green_total"`
 	GreenReachable int `json:"green_reachable"`
 }
 
@@ -296,8 +296,8 @@ const (
 )
 
 type ErrorUpdate struct {
-    Code    ErrorCode `json:"code"`
-    Message string    `json:"message"`
-    Phone   string    `json:"phone"`
-    Fatal   bool      `json:"fatal"`
+	Code    ErrorCode `json:"code"`
+	Message string    `json:"message"`
+	Phone   string    `json:"phone,omitempty"`
+	Fatal   bool      `json:"fatal"`
 }

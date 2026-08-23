@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
-	"sort"
 
 	"github.com/geodispatch/supervisor/config"
 	"github.com/geodispatch/supervisor/internal/agent"
@@ -24,6 +24,7 @@ import (
 // ─────────────────────────────────────────────
 //  PER-DEVICE TIMING RECORD
 // ─────────────────────────────────────────────
+
 type deviceTiming struct {
 	tSensor        time.Time
 	tCAMARAStart   time.Time
@@ -103,19 +104,18 @@ func durStr(a, b time.Time) string {
 // ─────────────────────────────────────────────
 
 func printBatchTable(batchIdx int, results []deviceResult, batchDur time.Duration) {
-	const w        = 105
+	const w = 105
 	const shelterW = 24
 
 	div := strings.Repeat("═", w)
 
-	// ── TABLE 1: device info ─────────────────────────────────────────────
 	fmt.Printf("╔%s╗\n", div)
 	fmt.Printf("║  %-*s║\n", w-2,
 		fmt.Sprintf("BATCH #%d — %d devices — completed in %s", batchIdx, len(results), batchDur))
 	fmt.Printf("╠%s╣\n", div)
 	fmt.Printf("║  %-16s %-9s %-9s %-11s %-11s %-5s %-5s %-*s║\n",
 		"PHONE", "ZONE", "DIST(km)", "ACTION", "REACH", "PRIO", "CONF",
-		shelterW + 6, "SHELTER")
+		shelterW+6, "SHELTER")
 	fmt.Printf("╠%s╣\n", div)
 
 	for _, r := range results {
@@ -135,11 +135,10 @@ func printBatchTable(batchIdx int, results []deviceResult, batchDur time.Duratio
 		)
 	}
 
-	// ── TABLE 2: time info ─────────────────────────────────────────────
 	fmt.Printf("╚%s╝\n", div)
 	fmt.Println()
 
-	const tw   = 90
+	const tw = 90
 	tdiv := strings.Repeat("═", tw)
 
 	fmt.Printf("╔%s╗\n", tdiv)
@@ -175,13 +174,13 @@ func main() {
 	log.Printf("[T+%dms] GeoDispatch supervisor starting...", elapsedMS(t0))
 
 	ctx := context.Background()
-	
+
 	db, err := database.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("database connection failed: %v", err)
 	}
 	defer db.Close()
-	
+
 	hub := dashboard.NewHub()
 	go hub.Run()
 	log.Printf("[T+%dms] websocket hub started", elapsedMS(t0))
@@ -215,6 +214,13 @@ func main() {
 // ─────────────────────────────────────────────
 //  PIPELINE
 // ─────────────────────────────────────────────
+
+// deviceInfo stores per-device data needed across pipeline stages
+type deviceInfo struct {
+	lat        float64
+	lng        float64
+	reachable  bool
+}
 
 func runPipeline(
 	cfg *config.Config,
@@ -251,7 +257,7 @@ func runPipeline(
 		log.Printf("[%s] no phones found near epicenter (radius=%.1fkm)", models.ErrDBError, input.RadiusKm)
 		return
 	}
-	log.Printf("[pipeline] %d phones found within %.1fkm of epicenter", len(phones), input.RadiusKm)
+	firstPhone := phones[0]
 
 	var (
 		nearestShelters []models.Shelter
@@ -265,7 +271,7 @@ func runPipeline(
 	// A — QoS on Demand
 	go func() {
 		defer wgAreaCalls.Done()
-		status, err := camara.RequestQoS(ctx, cfg, input.Epicenter)
+		status, err := camara.RequestQoS(ctx, cfg, input.Epicenter, firstPhone)
 		if err != nil {
 			log.Printf("[%s] QoS request failed: %v", models.ErrQoSFailed, err)
 			hub.BroadcastError(models.ErrorUpdate{
@@ -318,17 +324,20 @@ func runPipeline(
 
 	wgAreaCalls.Wait()
 	networkStatus.CongestionLevel = congestionLevel
-	
+
 	var (
 		allDevices []models.TriagedDevice
 		wgDevices  sync.WaitGroup
 	)
 
-	timingMap := make(map[string]*deviceTiming)
-	distMap   := make(map[string]float64)
+	timingMap  := make(map[string]*deviceTiming)
+	distMap    := make(map[string]float64)
+	deviceMap  := make(map[string]deviceInfo) // phone → lat/lng/reachable
 	var mu sync.Mutex
 
 	const camaraMaxConcurrent = 50
+	const reachabilityTimeout = 1000 * time.Millisecond
+
 	sem := make(chan struct{}, camaraMaxConcurrent)
 
 	for _, phone := range phones {
@@ -364,15 +373,20 @@ func runPipeline(
 			}()
 			go func() {
 				defer wgDev.Done()
-				re, err := camara.GetReachability(ctx, cfg, p)
+				devCtx, cancel := context.WithTimeout(ctx, reachabilityTimeout)
+				defer cancel()
+				re, err := camara.GetReachability(devCtx, cfg, p)
 				if err != nil {
-					log.Printf("[%s] reachability lookup failed phone=%s: %v", models.ErrCAMARATimeout, p, err)
+					log.Printf("[%s] reachability timeout/error phone=%s: %v → NOT_CONNECTED", models.ErrCAMARATimeout, p, err)
 					hub.BroadcastError(models.ErrorUpdate{
 						Code:    models.ErrCAMARATimeout,
-						Message: fmt.Sprintf("reachability lookup failed: %v", err),
+						Message: fmt.Sprintf("reachability timeout: %v", err),
 						Phone:   p,
 						Fatal:   false,
 					}, input.EventID)
+					reach = &models.CAMARAReachabilityResponse{
+						ReachabilityStatus: models.NotConnected,
+					}
 					return
 				}
 				reach = re
@@ -387,9 +401,15 @@ func runPipeline(
 
 			distKm := zones.Haversine(loc.Area.Center, input.Epicenter)
 			zone := zones.Assign(distKm, input.RadiusKm)
+			reachable := reach.ReachabilityStatus != models.NotConnected
 
 			mu.Lock()
 			distMap[p] = distKm
+			deviceMap[p] = deviceInfo{
+				lat:       loc.Area.Center.Lat,
+				lng:       loc.Area.Center.Lng,
+				reachable: reachable,
+			}
 			timingMap[p] = &deviceTiming{
 				tSensor:      tEvent,
 				tCAMARAStart: tCAMARAStart,
@@ -408,12 +428,13 @@ func runPipeline(
 			})
 			mu.Unlock()
 
+			// first broadcast — triage phase (dot appears on map)
 			hub.BroadcastDeviceUpdate(models.DeviceUpdate{
 				Phone:     p,
 				Latitude:  loc.Area.Center.Lat,
 				Longitude: loc.Area.Center.Lng,
 				Zone:      zone,
-				Reachable: reach.ReachabilityStatus != models.NotConnected,
+				Reachable: reachable,
 			}, input.EventID)
 		}(phone)
 	}
@@ -519,6 +540,7 @@ func runPipeline(
 
 				mu.Lock()
 				dist := distMap[d.Phone]
+				info := deviceMap[d.Phone]
 				var timing deviceTiming
 				if t, ok := timingMap[d.Phone]; ok {
 					t.tSMSSent = tSMSSent
@@ -533,9 +555,13 @@ func runPipeline(
 					timing:   timing,
 				}
 
+				// second broadcast — dispatch phase (dot updates with sms_sent/rescue_flag)
 				hub.BroadcastDeviceUpdate(models.DeviceUpdate{
 					Phone:      d.Phone,
+					Latitude:   info.lat,       // ← from deviceMap, not zero
+					Longitude:  info.lng,       // ← from deviceMap, not zero
 					Zone:       d.ZoneConfirmed,
+					Reachable:  info.reachable, // ← preserved from triage
 					SMSSent:    d.Action == models.ActionSMS || d.Action == models.ActionBoth,
 					RescueFlag: d.Action == models.ActionRescue || d.Action == models.ActionBoth,
 				}, input.EventID)

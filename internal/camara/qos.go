@@ -18,6 +18,7 @@ type qodSession struct {
 	sessionID string
 	expiresAt time.Time
 	profile   string
+	phone     string
 }
 
 var (
@@ -29,7 +30,19 @@ func epicenterKey(c models.Coordinates) string {
 	return fmt.Sprintf("%.4f,%.4f", c.Lat, c.Lng)
 }
 
+type qodDevice struct {
+	PhoneNumber string         `json:"phoneNumber"`
+	IPv4Address qodIPv4Address `json:"ipv4Address"`
+}
+
+type qodIPv4Address struct {
+	PublicAddress  string `json:"publicAddress"`
+	PrivateAddress string `json:"privateAddress"`
+	PublicPort     int    `json:"publicPort"`
+}
+
 type qodCreateRequest struct {
+	Device            qodDevice    `json:"device"`
 	ApplicationServer qodAppServer `json:"applicationServer"`
 	QosProfile        string       `json:"qosProfile"`
 	Duration          int          `json:"duration"`
@@ -49,9 +62,9 @@ type qodExtendRequest struct {
 	RequestedAdditionalDuration int `json:"requestedAdditionalDuration"`
 }
 
-func RequestQoS(ctx context.Context, cfg *config.Config, epicenter models.Coordinates) (models.NetworkStatus, error) {
+func RequestQoS(ctx context.Context, cfg *config.Config, epicenter models.Coordinates, phone string) (models.NetworkStatus, error) {
 	if cfg.IsReal() {
-		return requestQoSReal(ctx, cfg, epicenter)
+		return requestQoSReal(ctx, cfg, epicenter, phone)
 	}
 	return requestQoSMock(epicenter, cfg)
 }
@@ -65,16 +78,23 @@ func UpgradeQoS(ctx context.Context, cfg *config.Config, epicenter models.Coordi
 	return nil
 }
 
-func requestQoSReal(ctx context.Context, cfg *config.Config, epicenter models.Coordinates) (models.NetworkStatus, error) {
+func requestQoSReal(ctx context.Context, cfg *config.Config, epicenter models.Coordinates, phone string) (models.NetworkStatus, error) {
 	body := qodCreateRequest{
+		Device: qodDevice{
+			PhoneNumber: phone,
+			IPv4Address: qodIPv4Address{
+				PublicAddress:  "233.252.0.2",
+				PrivateAddress: "192.0.2.25",
+				PublicPort:     80,
+			},
+		},
 		ApplicationServer: qodAppServer{Ipv4Address: cfg.SupervisorPublicSubnet},
 		QosProfile:        cfg.QoSProfileInitial,
 		Duration:          cfg.QoSSessionDuration,
 	}
 	bodyBytes, _ := json.Marshal(body)
+	reqURL := fmt.Sprintf("%s/qod/v0/sessions", cfg.NokiaNacBaseURL)
 
-	reqURL := fmt.Sprintf("%s/quality-on-demand/v0/sessions", cfg.NokiaNacBaseURL)
-	
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return models.NetworkStatus{QoSStatus: models.QoSFailed}, fmt.Errorf("build qos request: %w", err)
@@ -102,6 +122,7 @@ func requestQoSReal(ctx context.Context, cfg *config.Config, epicenter models.Co
 		sessionID: qodResp.SessionID,
 		expiresAt: qodResp.ExpiresAt,
 		profile:   cfg.QoSProfileInitial,
+		phone:     phone,
 	}
 	qodMu.Unlock()
 
@@ -110,7 +131,6 @@ func requestQoSReal(ctx context.Context, cfg *config.Config, epicenter models.Co
 
 func upgradeQoSReal(ctx context.Context, cfg *config.Config, epicenter models.Coordinates) {
 	key := epicenterKey(epicenter)
-
 	qodMu.Lock()
 	session, ok := qodSessions[key]
 	qodMu.Unlock()
@@ -118,13 +138,13 @@ func upgradeQoSReal(ctx context.Context, cfg *config.Config, epicenter models.Co
 	if !ok || session.sessionID == "" {
 		upgradedCfg := *cfg
 		upgradedCfg.QoSProfileInitial = cfg.QoSProfileUpgrade
-		if _, err := requestQoSReal(ctx, &upgradedCfg, epicenter); err != nil {
+		if _, err := requestQoSReal(ctx, &upgradedCfg, epicenter, ""); err != nil {
 			fmt.Printf("[QoS] upgrade fallback create failed: %v\n", err)
 		}
 		return
 	}
 
-	extendURL := fmt.Sprintf("%s/quality-on-demand/v0/sessions/%s/extend", cfg.NokiaNacBaseURL, session.sessionID)
+	extendURL := fmt.Sprintf("%s/qod/v0/sessions/%s/extend", cfg.NokiaNacBaseURL, session.sessionID)
 	extBody, _ := json.Marshal(qodExtendRequest{RequestedAdditionalDuration: cfg.QoSExtendDuration})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, extendURL, bytes.NewReader(extBody))
@@ -153,11 +173,12 @@ func upgradeQoSReal(ctx context.Context, cfg *config.Config, epicenter models.Co
 		}
 	case http.StatusNotFound, http.StatusGone:
 		qodMu.Lock()
+		phone := session.phone
 		delete(qodSessions, key)
 		qodMu.Unlock()
 		upgradedCfg := *cfg
 		upgradedCfg.QoSProfileInitial = cfg.QoSProfileUpgrade
-		if _, err := requestQoSReal(ctx, &upgradedCfg, epicenter); err != nil {
+		if _, err := requestQoSReal(ctx, &upgradedCfg, epicenter, phone); err != nil {
 			fmt.Printf("[QoS] re-create after expiry failed: %v\n", err)
 		}
 	default:
