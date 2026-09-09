@@ -322,7 +322,7 @@
       - Improved maintainability for subsequent real-network integration iterations
 
 ────────────────────────────────────────────────────────────────
-  v0.7.0 => v0.8.0                                      [MINOR]
+  v0.7.1 => v0.8.0                                      [MINOR]
 ────────────────────────────────────────────────────────────────
   + Dashboard websocket delivery made concurrency-safe
       - Reworked `internal/dashboard/hub.go` to use a dedicated buffered message channel (`msgCh`)
