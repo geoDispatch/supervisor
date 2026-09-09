@@ -321,14 +321,68 @@
       - Applied formatting/readability cleanup across QoS and CAMARA call sites
       - Improved maintainability for subsequent real-network integration iterations
 
+────────────────────────────────────────────────────────────────
+  v0.7.0 => v0.8.0                                      [MINOR]
+────────────────────────────────────────────────────────────────
+  + Dashboard websocket delivery made concurrency-safe
+      - Reworked `internal/dashboard/hub.go` to use a dedicated buffered message channel (`msgCh`)
+      - Implemented single-writer broadcast loop in `Hub.Run()` to avoid concurrent websocket writes
+      - Added automatic stale-client cleanup on write failure
+      - Added non-blocking enqueue strategy (drop-on-full) to protect pipeline throughput under load
+
+  + Per-device state persistence across pipeline stages
+      - Added `deviceInfo` map in `cmd/supervisor/main.go` to persist:
+          latitude,
+          longitude,
+          reachability
+      - Second broadcast phase now reuses stored coordinates instead of emitting zero-value lat/lng
+      - Reachability status now preserved end-to-end from triage phase to dispatch updates
+
+  + Reachability timeout hardening in device triage
+      - Added per-device timeout guard for reachability lookups (`~1s`)
+      - On timeout/error, device is explicitly downgraded to `NOT_CONNECTED` fallback
+      - Error stream now reports reachability timeout context with phone-scoped diagnostics
+
+  · QoS request model aligned with newer CAMARA/NAC shape
+      - Extended QoS session create payload with `device` object and IPv4 addressing block
+      - Updated request signature:
+          `RequestQoS(ctx, cfg, epicenter, phone)`
+      - Updated QoS base path usage:
+          `/qod/v0/sessions`
+          `/qod/v0/sessions/{id}/extend`
+      - Stored phone value in QoS session cache for recovery/recreate continuity
+
+  · Congestion query flow refined for provider response variance
+      - Refactored congestion body generation through shared constructor (`newCongestionBody`)
+      - Added defaults for webhook URL/token when env values are missing (defensive fallback)
+      - Switched fetch endpoint to query-style path:
+          `/congestion-insights/v0/query`
+      - Added support for both object and array response formats
+      - Returns first item safely when array payload is received
+
+  · Event payload typing normalized for websocket contracts
+      - Updated `internal/models/models.go` `EventStart` fields:
+          `DisasterType` and `AftershockRisk` now serialized as strings
+      - Updated `ErrorUpdate.Phone` with `omitempty` JSON behavior
+      - Applied formatting/consistency cleanup in model definitions
+
+  · Seed profile rotation for regional simulation context
+      - `scripts/seed/seed_devices.sql` switched active dataset back to Morocco coordinates/phones
+      - Prior Budapest-shaped dataset kept as commented reference block for alternate testing
+
+  / Supervisor runtime and observability cleanup
+      - Improved internal readability/formatting in pipeline and batch rendering helpers
+      - Clarified broadcast stage intent (triage broadcast vs dispatch broadcast)
+      - Reduced ambiguity in map-update and timing tracking sections
+
 ════════════════════════════════════════════════════════════════
                         CURRENT RELEASE
 ════════════════════════════════════════════════════════════════
 
-  BUILD STATUS:     ⚠️ INTEGRATION PHASE (CAMARA REAL-FLOW HARDENING)
-  VERSION:          v0.7.0
-  RELEASE DATE:     August 22, 2026
-  FOCUS:            Congestion subscription flow + pipeline reliability
+  BUILD STATUS:     ✅ STABILIZATION PHASE (PIPELINE + DASHBOARD POLISH)
+  VERSION:          v0.8.0
+  RELEASE DATE:     August 23, 2026
+  FOCUS:            Websocket reliability, QoS/Congestion alignment, runtime polish
 
 ════════════════════════════════════════════════════════════════
   Legend:  + Added          · Changed             / Fixed
