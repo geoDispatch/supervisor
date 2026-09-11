@@ -1,5 +1,4 @@
 services:
-
   postgres:
     image: postgis/postgis:16-3.4
     container_name: geodispatch_postgres
@@ -7,8 +6,8 @@ services:
 
     environment:
       POSTGRES_DB:       geodispatch
-      POSTGRES_USER:     geodispatch_user
-      POSTGRES_PASSWORD: geodispatch_pass
+      POSTGRES_USER:     geodispatch
+      POSTGRES_PASSWORD: geodispatch
 
     ports:
       - "5432:5432"
@@ -17,9 +16,10 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
       - ./migrations/002_events.sql:/docker-entrypoint-initdb.d/002_events.sql:ro
-
+      - ./scripts/seed/seed_shelters.sql:/docker-entrypoint-initdb.d/003_seed_shelters.sql:ro
+      - ./scripts/seed/seed_devices.sql:/docker-entrypoint-initdb.d/004_seed_devices.sql:ro 
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U geodispatch_user -d geodispatch_pass"]
+      test: ["CMD-SHELL", "pg_isready -U geodispatch -d geodispatch"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -40,7 +40,7 @@ services:
       - "8080:8080"
 
     env_file:
-      - .env
+      - ../.env
 
     # Makes host.docker.internal resolve correctly on Linux
     extra_hosts:
