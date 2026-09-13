@@ -2,105 +2,94 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
+	"math"
+	"math/rand"
 	"net/http"
 	"strings"
 )
 
-var phoneLocations = map[string]map[string]interface{}{
-	// ── RED zone — within ~3km of epicenter (33.5731, -7.5898) ──────────
-	"+212600000001": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5731, "longitude": -7.5898}, "radius": 500.0}}, // 0.00km — epicenter
-	"+212600000002": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5740, "longitude": -7.5880}, "radius": 500.0}}, // 0.20km
-	"+212600000003": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5720, "longitude": -7.5920}, "radius": 500.0}}, // 0.25km
-	"+212600000004": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5750, "longitude": -7.5850}, "radius": 500.0}}, // 0.49km
-	"+212600000005": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5710, "longitude": -7.5950}, "radius": 500.0}}, // 0.60km
-	"+212600000006": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5760, "longitude": -7.5820}, "radius": 500.0}}, // 0.80km
-	"+212600000007": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5800, "longitude": -7.5780}, "radius": 500.0}}, // 1.20km
-	"+212600000008": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5700, "longitude": -7.6000}, "radius": 500.0}}, // 1.30km
-	"+212600000009": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5820, "longitude": -7.5700}, "radius": 500.0}}, // 1.80km
-	"+212600000010": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5680, "longitude": -7.6050}, "radius": 500.0}}, // 1.90km
-	"+212600000011": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5800, "longitude": -7.5700}, "radius": 500.0}}, // 2.00km
-	"+212600000012": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5660, "longitude": -7.6100}, "radius": 500.0}}, // 2.40km
-	"+212600000013": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5840, "longitude": -7.5620}, "radius": 500.0}}, // 2.70km
-	"+212600000014": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5640, "longitude": -7.6150}, "radius": 500.0}}, // 2.90km
+var phoneLocations = make(map[string]map[string]interface{})
+var phoneReachability = make(map[string]map[string]interface{})
 
-	// ── ORANGE zone — 3km to 10km ─────────────────────────────────────────
-	"+212600000015": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5850, "longitude": -7.5500}, "radius": 500.0}}, // 3.80km
-	"+212600000016": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5600, "longitude": -7.6200}, "radius": 500.0}}, // 4.10km
-	"+212600000017": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5900, "longitude": -7.5400}, "radius": 500.0}}, // 4.70km
-	"+212600000018": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5550, "longitude": -7.6300}, "radius": 500.0}}, // 5.20km
-	"+212600000019": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5950, "longitude": -7.5300}, "radius": 500.0}}, // 5.80km
-	"+212600000020": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5500, "longitude": -7.6400}, "radius": 500.0}}, // 6.10km
-	"+212600000021": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.6000, "longitude": -7.5200}, "radius": 500.0}}, // 6.50km
-	"+212600000022": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5450, "longitude": -7.6500}, "radius": 500.0}}, // 7.00km
-	"+212600000023": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.6050, "longitude": -7.5100}, "radius": 500.0}}, // 7.40km
-	"+212600000024": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5400, "longitude": -7.6600}, "radius": 500.0}}, // 8.00km
-	"+212600000025": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.6100, "longitude": -7.5000}, "radius": 500.0}}, // 8.40km
-	"+212600000026": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5350, "longitude": -7.6700}, "radius": 500.0}}, // 8.90km
-	"+212600000027": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.6150, "longitude": -7.4900}, "radius": 500.0}}, // 9.30km
-	"+212600000028": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5300, "longitude": -7.6800}, "radius": 500.0}}, // 9.80km
+func init() {
+	// Fixed seed ensures the mock generates the exact same coordinates every time it boots
+	rand.Seed(2026) 
+	
+	epicenterLat := 33.5731
+	epicenterLng := -7.5898
+	lastTime := "2026-09-13T10:00:00Z"
 
-	// ── GREEN zone — beyond 10km ──────────────────────────────────────────
-	"+212600000029": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.6200, "longitude": -7.4800}, "radius": 500.0}}, // 10.50km
-	"+212600000030": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5250, "longitude": -7.6900}, "radius": 500.0}}, // 11.00km
-	"+212600000031": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.6250, "longitude": -7.4700}, "radius": 500.0}}, // 11.60km
-	"+212600000032": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5200, "longitude": -7.7000}, "radius": 500.0}}, // 12.10km
-	"+212600000033": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.6300, "longitude": -7.4600}, "radius": 500.0}}, // 12.70km
-	"+212600000034": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5150, "longitude": -7.7100}, "radius": 500.0}}, // 13.20km
-	"+212600000035": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.6350, "longitude": -7.4500}, "radius": 500.0}}, // 13.80km
-	"+212600000036": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5100, "longitude": -7.7200}, "radius": 500.0}}, // 14.30km
-	"+212600000037": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.6400, "longitude": -7.4400}, "radius": 500.0}}, // 14.90km
-	"+212600000038": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5050, "longitude": -7.7300}, "radius": 500.0}}, // 15.50km
-	"+212600000039": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.6450, "longitude": -7.4300}, "radius": 500.0}}, // 16.10km
-	"+212600000040": {"lastLocationTime": "2026-08-18T10:00:00Z", "area": map[string]interface{}{"areaType": "CIRCLE", "center": map[string]float64{"latitude": 33.5000, "longitude": -7.7400}, "radius": 500.0}}, // 16.70km
-}
+	for i := 1; i <= 300; i++ {
+		// Formats exactly to match DB: +212600000001 through +212600000300
+		phone := fmt.Sprintf("+21260000%04d", i)
+		
+		var lat, lng float64
+		var reach string
+		angle := rand.Float64() * 2 * math.Pi
 
-var phoneReachability = map[string]map[string]interface{}{
-	// RED zone — heavy casualties, mix of unreachable and reachable
-	"+212600000001": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "NOT_CONNECTED"},    // epicenter — likely buried
-	"+212600000002": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "NOT_CONNECTED"},    // very close — no signal
-	"+212600000003": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "NOT_CONNECTED"},    // very close — no signal
-	"+212600000004": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_SMS"},    // barely reachable
-	"+212600000005": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "NOT_CONNECTED"},    // no signal
-	"+212600000006": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_SMS"},    // SMS only
-	"+212600000007": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},   // data available
-	"+212600000008": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "NOT_CONNECTED"},    // no signal
-	"+212600000009": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},   // data available
-	"+212600000010": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "NOT_CONNECTED"},    // no signal
-	"+212600000011": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_SMS"},    // SMS only
-	"+212600000012": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "NOT_CONNECTED"},    // no signal
-	"+212600000013": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},   // data available
-	"+212600000014": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_SMS"},    // SMS only
+		// RED ZONE (1 - 150)
+		if i <= 150 {
+			radius := math.Sqrt(rand.Float64() * 0.002025)
+			lat = epicenterLat + radius*math.Sin(angle)
+			lng = epicenterLng + radius*math.Cos(angle)
+			
+			// 50% unreachable, 30% SMS, 20% Data
+			prob := rand.Float64()
+			if prob < 0.5 {
+				reach = "NOT_CONNECTED"
+			} else if prob < 0.8 {
+				reach = "CONNECTED_SMS"
+			} else {
+				reach = "CONNECTED_DATA"
+			}
 
-	// ORANGE zone — network congested but mostly reachable
-	"+212600000015": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000016": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "NOT_CONNECTED"},    // tower damaged
-	"+212600000017": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000018": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_SMS"},
-	"+212600000019": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000020": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "NOT_CONNECTED"},    // tower damaged
-	"+212600000021": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000022": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000023": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_SMS"},
-	"+212600000024": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000025": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000026": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "NOT_CONNECTED"},    // tower damaged
-	"+212600000027": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000028": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_SMS"},
+		// ORANGE ZONE (151 - 250)
+		} else if i <= 250 {
+			radius := math.Sqrt(rand.Float64()*0.006075 + 0.002025)
+			lat = epicenterLat + radius*math.Sin(angle)
+			lng = epicenterLng + radius*math.Cos(angle)
+			
+			// 15% unreachable, 60% SMS, 25% Data
+			prob := rand.Float64()
+			if prob < 0.15 {
+				reach = "NOT_CONNECTED"
+			} else if prob < 0.75 {
+				reach = "CONNECTED_SMS"
+			} else {
+				reach = "CONNECTED_DATA"
+			}
 
-	// GREEN zone — network stable, almost all reachable
-	"+212600000029": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000030": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000031": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000032": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_SMS"},
-	"+212600000033": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000034": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000035": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000036": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000037": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_SMS"},
-	"+212600000038": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000039": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
-	"+212600000040": {"lastStatusTime": "2026-08-18T10:00:00Z", "reachabilityStatus": "CONNECTED_DATA"},
+		// GREEN ZONE (251 - 300)
+		} else {
+			radius := math.Sqrt(rand.Float64()*0.0115 + 0.0081)
+			lat = epicenterLat + radius*math.Sin(angle)
+			lng = epicenterLng + radius*math.Cos(angle)
+			
+			// 95% Data, 5% SMS, 0% unreachable
+			if rand.Float64() < 0.05 {
+				reach = "CONNECTED_SMS"
+			} else {
+				reach = "CONNECTED_DATA"
+			}
+		}
+
+		// Populate the maps
+		phoneLocations[phone] = map[string]interface{}{
+			"lastLocationTime": lastTime,
+			"area": map[string]interface{}{
+				"areaType": "CIRCLE",
+				"center": map[string]float64{"latitude": lat, "longitude": lng},
+				"radius":   500.0,
+			},
+		}
+		
+		phoneReachability[phone] = map[string]interface{}{
+			"lastStatusTime":     lastTime,
+			"reachabilityStatus": reach,
+		}
+	}
 }
 
 func getPhone(r *http.Request) string {
@@ -138,7 +127,7 @@ func handleQoS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"level":      "CRITICAL",
-		"timestamp":  "2026-08-18T10:00:00Z",
+		"timestamp":  "2026-09-13T10:00:00Z",
 		"qos_status": "active",
 	})
 }
