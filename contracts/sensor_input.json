@@ -2,7 +2,8 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "sensor_input",
   "title": "SensorInput",
-  "description": "Disaster sensor POST payload to Go supervisor. Source: USGS GeoJSON standard (earthquake). Endpoint: POST /sensor",
+  "description": "Disaster sensor report POSTed to the Go supervisor (POST /sensor, Content-Type: application/json). Every field is required and unknown fields are rejected (422 validation_failed). Schema-valid input can still be refused at runtime: a disaster_type that GET /capabilities does not report as \"operational\" gets 422 \"unsupported: not implemented by this supervisor\". See docs/README.md for the full response table.",
+  "x-contract-version": 2,
   "type": "object",
   "required": [
     "event_id",
@@ -19,22 +20,26 @@
   "properties": {
     "event_id": {
       "type": "string",
-      "description": "Unique disaster event identifier",
-      "example": "EQ-2024-001"
+      "description": "Unique disaster event identifier, 1..64 characters: a letter or digit followed by letters, digits, '.', '_', ':' or '-'. Reusing an id with a different payload is refused (409 event_id_conflict).",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$",
+      "example": "EQ-20260912-0001"
     },
     "disaster_type": {
       "type": "string",
       "enum": ["earthquake", "flood", "heatwave"],
-      "description": "Type of disaster detected"
+      "description": "Type of disaster detected. Only types that GET /capabilities reports as \"operational\" are accepted (today: earthquake); flood and heatwave are rejected with 422 \"unsupported: not implemented by this supervisor\"."
     },
     "timestamp": {
       "type": "integer",
-      "description": "Unix timestamp in milliseconds",
-      "example": 1700000000000
+      "description": "Sensor report time, Unix milliseconds (> 0)",
+      "minimum": 1,
+      "example": 1757699999000
     },
     "severity": {
       "type": "number",
-      "description": "Richter magnitude for earthquakes",
+      "description": "Richter magnitude for earthquakes (0..10)",
       "minimum": 0,
       "maximum": 10,
       "example": 6.8
@@ -44,15 +49,17 @@
     },
     "radius_km": {
       "type": "number",
-      "description": "Estimated affected radius in kilometres",
-      "minimum": 0,
-      "example": 50.0
+      "description": "Estimated affected radius in kilometres (> 0, <= 500). Zones are bands of this radius.",
+      "exclusiveMinimum": 0,
+      "maximum": 500,
+      "example": 20
     },
     "depth_km": {
       "type": "number",
-      "description": "Earthquake depth in km (0 for non-seismic disasters)",
+      "description": "Earthquake depth in km, 0..800 (0 for non-seismic disasters)",
       "minimum": 0,
-      "example": 10.0
+      "maximum": 800,
+      "example": 10.5
     },
     "aftershock_risk": {
       "type": "string",
@@ -74,30 +81,44 @@
           "type": "number",
           "minimum": -90,
           "maximum": 90,
-          "example": 33.9716
+          "example": 33.5731
         },
         "longitude": {
           "type": "number",
           "minimum": -180,
           "maximum": 180,
-          "example": -6.8498
+          "example": -7.5898
         }
       }
     }
   },
   "examples": [
     {
-      "event_id": "EQ-2024-001",
+      "event_id": "EQ-20260912-0001",
       "disaster_type": "earthquake",
-      "timestamp": 1700000000000,
+      "timestamp": 1757699999000,
       "severity": 6.8,
       "epicenter": {
-        "latitude": 33.9716,
-        "longitude": -6.8498
+        "latitude": 33.5731,
+        "longitude": -7.5898
       },
-      "radius_km": 50.0,
-      "depth_km": 10.0,
+      "radius_km": 20,
+      "depth_km": 10.5,
       "aftershock_risk": "HIGH",
+      "tsunami_risk": false
+    },
+    {
+      "event_id": "EQ-20260912-0002",
+      "disaster_type": "earthquake",
+      "timestamp": 1757703600000,
+      "severity": 5.4,
+      "epicenter": {
+        "latitude": 47.4979,
+        "longitude": 19.0402
+      },
+      "radius_km": 10,
+      "depth_km": 8,
+      "aftershock_risk": "MEDIUM",
       "tsunami_risk": false
     }
   ]

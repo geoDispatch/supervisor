@@ -9,8 +9,8 @@ import (
 
 // PhonesNearEpicenter returns all E.164 phone numbers whose last-known
 // location falls within `radiusKm` kilometres of the epicenter, ordered
-// by ascending distance so the pipeline's min-heap starts with the
-// most-critical devices.
+// by ascending distance. The pipeline recomputes zones and distances
+// itself; the order only makes triage start near the epicentre.
 //
 // Schema assumption (from migrations/001_init.sql):
 //
@@ -22,8 +22,8 @@ import (
 //	);
 //	CREATE INDEX devices_location_idx ON devices USING GIST (location);
 //
-// Devices with a NULL location are excluded — CAMARA will be queried for
-// live location during the per-device goroutine stage.
+// Devices with a NULL location are excluded. For the devices returned,
+// CAMARA is queried for the live location during triage.
 const phonesNearEpicenterSQL = `
 SELECT phone
 FROM   devices
@@ -44,7 +44,9 @@ func (db *DB) PhonesNearEpicenter(
 	epicenter models.Coordinates,
 	radiusKm float64,
 ) ([]string, error) {
-
+	if err := db.ready(); err != nil {
+		return nil, err
+	}
 	rows, err := db.pool.QueryContext(
 		ctx,
 		phonesNearEpicenterSQL,

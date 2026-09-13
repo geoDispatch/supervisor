@@ -47,9 +47,15 @@ import (
 //  );
 // ─────────────────────────────────────────────────────────────────────────────
 
-// InsertEvent persists the top-level disaster event metadata.
-// Call this once per SensorInput, before any per-device writes.
-func (db *DB) InsertEvent(ctx context.Context, input *models.SensorInput) error {
+// InsertEvent persists the top-level disaster event metadata, once per
+// accepted SensorInput, before any per-device writes. inserted is false when
+// a row with this id already exists (ON CONFLICT DO NOTHING affected no
+// row): the id was used before, e.g. before a supervisor restart, and the
+// caller must refuse it rather than mix two incidents under one id.
+func (db *DB) InsertEvent(ctx context.Context, input *models.SensorInput) (inserted bool, err error) {
+	if err := db.ready(); err != nil {
+		return false, err
+	}
 	const q = `
 INSERT INTO events (
     id, disaster_type, severity,
@@ -58,7 +64,7 @@ INSERT INTO events (
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (id) DO NOTHING;
 `
-	_, err := db.pool.ExecContext(ctx, q,
+	res, err := db.pool.ExecContext(ctx, q,
 		input.EventID,
 		string(input.DisasterType),
 		input.Severity,
@@ -70,26 +76,33 @@ ON CONFLICT (id) DO NOTHING;
 		time.UnixMilli(input.Timestamp).UTC(),
 	)
 	if err != nil {
-		return fmt.Errorf("database: InsertEvent %q: %w", input.EventID, err)
+		return false, fmt.Errorf("database: InsertEvent %q: %w", input.EventID, err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("database: InsertEvent %q rows affected: %w", input.EventID, err)
+	}
+	return n == 1, nil
 }
 
-// InsertDeviceLog writes one row per DeviceDecision after the AI agent
-// responds.  Call this from the dispatch goroutine alongside SendSMS /
-// FlagRescue so all outcomes are durably recorded.
+// InsertDeviceLog writes one audit row per validated DeviceDecision. The
+// shelter_name column is kept in the schema but always NULL: the agent
+// contract has no shelter name.
 func (db *DB) InsertDeviceLog(
 	ctx context.Context,
 	eventID string,
 	d models.DeviceDecision,
 ) error {
+	if err := db.ready(); err != nil {
+		return err
+	}
 	const q = `
 INSERT INTO device_logs (
     event_id, phone, zone, action,
     sms_message, shelter_name,
     rescue_priority, confidence, zone_escalated,
     logged_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW());
+) VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8, NOW());
 `
 	_, err := db.pool.ExecContext(ctx, q,
 		eventID,
@@ -97,27 +110,28 @@ INSERT INTO device_logs (
 		string(d.ZoneConfirmed),
 		string(d.Action),
 		d.SMSMessage,
-		d.ShelterName,
 		d.RescuePriority,
 		d.Confidence,
 		d.ZoneEscalated,
 	)
 	if err != nil {
 		return fmt.Errorf("database: InsertDeviceLog phone=%s event=%s: %w",
-			d.Phone, eventID, err)
+			models.MaskPhone(d.Phone), eventID, err)
 	}
 	return nil
 }
 
 // FlagRescue writes a rescue_flags row for a device that needs physical
-// intervention.  This is the function called by dispatch.FlagRescue —
-// the dispatch package holds the business logic (priority thresholds,
-// duplicate suppression) while this method owns the write.
+// intervention (dispatch.FlagRescue delegates here). A repeat for the same
+// (event_id, phone) is a no-op.
 func (db *DB) FlagRescue(
 	ctx context.Context,
 	eventID string,
 	d models.DeviceDecision,
 ) error {
+	if err := db.ready(); err != nil {
+		return err
+	}
 	const q = `
 INSERT INTO rescue_flags (
     event_id, phone, zone, rescue_priority, flagged_at
@@ -132,7 +146,7 @@ ON CONFLICT DO NOTHING;
 	)
 	if err != nil {
 		return fmt.Errorf("database: FlagRescue phone=%s event=%s: %w",
-			d.Phone, eventID, err)
+			models.MaskPhone(d.Phone), eventID, err)
 	}
 	return nil
 }

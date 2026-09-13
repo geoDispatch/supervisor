@@ -2,363 +2,1193 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "ws_update",
   "title": "WSUpdate",
-  "description": "Go supervisor → React dashboard WebSocket messages. All messages share the WSUpdate envelope. The 'type' field determines which payload schema to use.",
-  "type": "object",
-  "required": [
-    "type",
-    "event_id",
-    "timestamp",
-    "payload"
+  "description": "Go supervisor -> dashboard WebSocket frames (GET /ws), contract v2. Every frame is one JSON envelope {v, type, event_id, seq, timestamp, replay, payload}; `type` selects exactly one of the frame definitions below. Event frames (event_start, event_context, device_update, zone_summary, narrative_update, error, event_complete) carry seq >= 1; control frames (snapshot_begin, snapshot_end, heartbeat) carry seq 0. `examples` is an excerpt of one development-fixture stream (Casablanca fixture devices); frames between the examples are omitted. See docs/README.md for the connection flow and client obligations.",
+  "x-contract-version": 2,
+  "oneOf": [
+    {"$ref": "#/definitions/SnapshotBeginFrame"},
+    {"$ref": "#/definitions/SnapshotEndFrame"},
+    {"$ref": "#/definitions/HeartbeatFrame"},
+    {"$ref": "#/definitions/EventStartFrame"},
+    {"$ref": "#/definitions/EventContextFrame"},
+    {"$ref": "#/definitions/DeviceUpdateFrame"},
+    {"$ref": "#/definitions/ZoneSummaryFrame"},
+    {"$ref": "#/definitions/NarrativeUpdateFrame"},
+    {"$ref": "#/definitions/ErrorFrame"},
+    {"$ref": "#/definitions/EventCompleteFrame"}
   ],
-  "additionalProperties": false,
-  "properties": {
-    "type": {
-      "type": "string",
-      "enum": [
-        "event_start",
-        "device_update",
-        "zone_summary",
-        "narrative_update",
-        "error"
-      ],
-      "description": "Message type — React switches on this to parse the payload"
-    },
-    "event_id": {
-      "type": "string",
-      "description": "Disaster event identifier this message belongs to",
-      "example": "EQ-2024-001"
-    },
-    "timestamp": {
-      "type": "integer",
-      "description": "Unix timestamp in milliseconds when Go emitted this message",
-      "example": 1700000000000
-    },
-    "payload": {
-      "description": "Varies by type. See oneOf schemas below.",
-      "oneOf": [
-        {
-          "$ref": "#/definitions/EventStart"
-        },
-        {
-          "$ref": "#/definitions/DeviceUpdate"
-        },
-        {
-          "$ref": "#/definitions/ZoneSummary"
-        },
-        {
-          "$ref": "#/definitions/NarrativeUpdate"
-        },
-        {
-          "$ref": "#/definitions/ErrorUpdate"
-        }
-      ]
-    }
-  },
   "definitions": {
-    "Coordinates": {
+    "SnapshotBeginFrame": {
+      "title": "snapshot_begin frame",
+      "description": "FIRST frame on every connection. Opens the snapshot: the frames up to snapshot_end are replays (replay: true) of the held event's state.",
       "type": "object",
-      "required": [
-        "latitude",
-        "longitude"
-      ],
+      "required": ["v", "type", "event_id", "seq", "timestamp", "replay", "payload"],
       "additionalProperties": false,
       "properties": {
-        "latitude": {
-          "type": "number",
-          "minimum": -90,
-          "maximum": 90
+        "v": {"$ref": "#/definitions/ContractVersion"},
+        "type": {"type": "string", "const": "snapshot_begin"},
+        "event_id": {"$ref": "#/definitions/ControlEventId"},
+        "seq": {"$ref": "#/definitions/ControlSeq"},
+        "timestamp": {"$ref": "#/definitions/EmitTimestamp"},
+        "replay": {"type": "boolean", "const": false, "description": "Control frames are never replayed."},
+        "payload": {"$ref": "#/definitions/SnapshotBeginPayload"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"event_id": {"const": ""}}, "required": ["event_id"]},
+          "then": {
+            "properties": {
+              "payload": {
+                "properties": {"head_seq": {"const": 0}, "active": {"const": false}, "lifecycle": {"const": "idle"}}
+              }
+            }
+          },
+          "else": {
+            "properties": {"payload": {"properties": {"head_seq": {"minimum": 1}, "lifecycle": {"not": {"const": "idle"}}}}}
+          }
         },
-        "longitude": {
-          "type": "number",
-          "minimum": -180,
-          "maximum": 180
+        {
+          "if": {
+            "properties": {"payload": {"properties": {"lifecycle": {"const": "running"}}, "required": ["lifecycle"]}},
+            "required": ["payload"]
+          },
+          "then": {"properties": {"payload": {"properties": {"active": {"const": true}}}}},
+          "else": {"properties": {"payload": {"properties": {"active": {"const": false}}}}}
+        }
+      ]
+    },
+    "SnapshotEndFrame": {
+      "title": "snapshot_end frame",
+      "description": "Closes the snapshot. Same event_id as snapshot_begin. Live frames follow with seq > head_seq, with no gap and no duplicate.",
+      "type": "object",
+      "required": ["v", "type", "event_id", "seq", "timestamp", "replay", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "v": {"$ref": "#/definitions/ContractVersion"},
+        "type": {"type": "string", "const": "snapshot_end"},
+        "event_id": {"$ref": "#/definitions/ControlEventId"},
+        "seq": {"$ref": "#/definitions/ControlSeq"},
+        "timestamp": {"$ref": "#/definitions/EmitTimestamp"},
+        "replay": {"type": "boolean", "const": false, "description": "Control frames are never replayed."},
+        "payload": {"$ref": "#/definitions/SnapshotEndPayload"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"event_id": {"const": ""}}, "required": ["event_id"]},
+          "then": {"properties": {"payload": {"properties": {"head_seq": {"const": 0}, "replayed": {"const": 0}}}}},
+          "else": {
+            "properties": {"payload": {"properties": {"head_seq": {"minimum": 1}, "replayed": {"minimum": 1}}}}
+          }
+        }
+      ]
+    },
+    "HeartbeatFrame": {
+      "title": "heartbeat frame",
+      "description": "Sent every WS_HEARTBEAT_SEC (default 15 s) on every connection. head_seq greater than the last seq the client saw means frames were lost: resync.",
+      "type": "object",
+      "required": ["v", "type", "event_id", "seq", "timestamp", "replay", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "v": {"$ref": "#/definitions/ContractVersion"},
+        "type": {"type": "string", "const": "heartbeat"},
+        "event_id": {"$ref": "#/definitions/ControlEventId"},
+        "seq": {"$ref": "#/definitions/ControlSeq"},
+        "timestamp": {"$ref": "#/definitions/EmitTimestamp"},
+        "replay": {"type": "boolean", "const": false, "description": "Control frames are never replayed."},
+        "payload": {"$ref": "#/definitions/HeartbeatPayload"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"event_id": {"const": ""}}, "required": ["event_id"]},
+          "then": {
+            "properties": {
+              "payload": {
+                "properties": {"head_seq": {"const": 0}, "active": {"const": false}, "lifecycle": {"const": "idle"}}
+              }
+            }
+          },
+          "else": {
+            "properties": {"payload": {"properties": {"head_seq": {"minimum": 1}, "lifecycle": {"not": {"const": "idle"}}}}}
+          }
+        },
+        {
+          "if": {
+            "properties": {"payload": {"properties": {"lifecycle": {"const": "running"}}, "required": ["lifecycle"]}},
+            "required": ["payload"]
+          },
+          "then": {"properties": {"payload": {"properties": {"active": {"const": true}}}}},
+          "else": {"properties": {"payload": {"properties": {"active": {"const": false}}}}}
+        }
+      ]
+    },
+    "EventStartFrame": {
+      "title": "event_start frame",
+      "description": "First frame of an event (seq is always 1). A live event_start replaces ALL previous event state.",
+      "type": "object",
+      "required": ["v", "type", "event_id", "seq", "timestamp", "replay", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "v": {"$ref": "#/definitions/ContractVersion"},
+        "type": {"type": "string", "const": "event_start"},
+        "event_id": {"$ref": "#/definitions/EventId"},
+        "seq": {"type": "integer", "const": 1},
+        "timestamp": {"$ref": "#/definitions/EmitTimestamp"},
+        "replay": {"type": "boolean", "description": "true only for frames re-sent inside a connection snapshot."},
+        "payload": {"$ref": "#/definitions/EventStartPayload"}
+      }
+    },
+    "EventContextFrame": {
+      "title": "event_context frame",
+      "description": "Area context (devices in radius, shelters, network). Latest wins.",
+      "type": "object",
+      "required": ["v", "type", "event_id", "seq", "timestamp", "replay", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "v": {"$ref": "#/definitions/ContractVersion"},
+        "type": {"type": "string", "const": "event_context"},
+        "event_id": {"$ref": "#/definitions/EventId"},
+        "seq": {"$ref": "#/definitions/EventSeq"},
+        "timestamp": {"$ref": "#/definitions/EmitTimestamp"},
+        "replay": {"type": "boolean", "description": "true only for frames re-sent inside a connection snapshot."},
+        "payload": {"$ref": "#/definitions/EventContextPayload"}
+      }
+    },
+    "DeviceUpdateFrame": {
+      "title": "device_update frame",
+      "description": "Full current state of one device, keyed by phone.",
+      "type": "object",
+      "required": ["v", "type", "event_id", "seq", "timestamp", "replay", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "v": {"$ref": "#/definitions/ContractVersion"},
+        "type": {"type": "string", "const": "device_update"},
+        "event_id": {"$ref": "#/definitions/EventId"},
+        "seq": {"$ref": "#/definitions/EventSeq"},
+        "timestamp": {"$ref": "#/definitions/EmitTimestamp"},
+        "replay": {"type": "boolean", "description": "true only for frames re-sent inside a connection snapshot."},
+        "payload": {"$ref": "#/definitions/DeviceUpdatePayload"}
+      }
+    },
+    "ZoneSummaryFrame": {
+      "title": "zone_summary frame",
+      "description": "Cumulative per-zone counters; replaces the previous summary.",
+      "type": "object",
+      "required": ["v", "type", "event_id", "seq", "timestamp", "replay", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "v": {"$ref": "#/definitions/ContractVersion"},
+        "type": {"type": "string", "const": "zone_summary"},
+        "event_id": {"$ref": "#/definitions/EventId"},
+        "seq": {"$ref": "#/definitions/EventSeq"},
+        "timestamp": {"$ref": "#/definitions/EmitTimestamp"},
+        "replay": {"type": "boolean", "description": "true only for frames re-sent inside a connection snapshot."},
+        "payload": {"$ref": "#/definitions/ZoneSummaryPayload"}
+      }
+    },
+    "NarrativeUpdateFrame": {
+      "title": "narrative_update frame",
+      "description": "AI situation report for one zone; replaces that zone's previous narrative.",
+      "type": "object",
+      "required": ["v", "type", "event_id", "seq", "timestamp", "replay", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "v": {"$ref": "#/definitions/ContractVersion"},
+        "type": {"type": "string", "const": "narrative_update"},
+        "event_id": {"$ref": "#/definitions/EventId"},
+        "seq": {"$ref": "#/definitions/EventSeq"},
+        "timestamp": {"$ref": "#/definitions/EmitTimestamp"},
+        "replay": {"type": "boolean", "description": "true only for frames re-sent inside a connection snapshot."},
+        "payload": {"$ref": "#/definitions/NarrativePayload"}
+      }
+    },
+    "ErrorFrame": {
+      "title": "error frame",
+      "description": "A failure. `fatal` decides whether the pipeline stopped.",
+      "type": "object",
+      "required": ["v", "type", "event_id", "seq", "timestamp", "replay", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "v": {"$ref": "#/definitions/ContractVersion"},
+        "type": {"type": "string", "const": "error"},
+        "event_id": {"$ref": "#/definitions/EventId"},
+        "seq": {"$ref": "#/definitions/EventSeq"},
+        "timestamp": {"$ref": "#/definitions/EmitTimestamp"},
+        "replay": {"type": "boolean", "description": "true only for frames re-sent inside a connection snapshot."},
+        "payload": {"$ref": "#/definitions/ErrorPayload"}
+      }
+    },
+    "EventCompleteFrame": {
+      "title": "event_complete frame",
+      "description": "Terminal frame of an event, sent exactly once.",
+      "type": "object",
+      "required": ["v", "type", "event_id", "seq", "timestamp", "replay", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "v": {"$ref": "#/definitions/ContractVersion"},
+        "type": {"type": "string", "const": "event_complete"},
+        "event_id": {"$ref": "#/definitions/EventId"},
+        "seq": {"$ref": "#/definitions/EventSeq"},
+        "timestamp": {"$ref": "#/definitions/EmitTimestamp"},
+        "replay": {"type": "boolean", "description": "true only for frames re-sent inside a connection snapshot."},
+        "payload": {"$ref": "#/definitions/EventCompletePayload"}
+      }
+    },
+    "DisasterType": {
+      "type": "string",
+      "enum": ["earthquake", "flood", "heatwave"],
+      "description": "Disaster type echoed from the accepted SensorInput. Only types that GET /capabilities reports as \"operational\" are ever accepted by POST /sensor, so today this is always \"earthquake\"."
+    },
+    "AftershockRisk": {
+      "type": "string",
+      "enum": ["LOW", "MEDIUM", "HIGH"],
+      "description": "Aftershock risk level from the sensor."
+    },
+    "Zone": {
+      "type": "string",
+      "enum": ["red", "orange", "green"],
+      "description": "Danger zone, lowercase. red is the most severe, green the least (green < orange < red)."
+    },
+    "ReachabilityStatus": {
+      "type": "string",
+      "enum": ["CONNECTED_DATA", "CONNECTED_SMS", "NOT_CONNECTED"],
+      "description": "CAMARA Device Reachability status (not an AI output)."
+    },
+    "Stage": {
+      "type": "string",
+      "enum": ["triaged", "decided", "decision_failed"],
+      "description": "triaged = located by CAMARA, awaiting the AI; decided = the AI decision was validated and dispatched; decision_failed = the AI batch failed or was rejected, so no decision exists."
+    },
+    "Action": {
+      "type": "string",
+      "enum": ["sms", "rescue_flag", "both", "none"],
+      "description": "AI action for the device."
+    },
+    "SmsStatus": {
+      "type": "string",
+      "enum": ["not_requested", "sent", "failed", "not_configured"],
+      "description": "not_requested = the decision did not ask for an SMS; sent = the SMS gateway accepted it; failed = the gateway rejected it; not_configured = the AI asked for an SMS but no SMS gateway is configured, so NOTHING was sent."
+    },
+    "RescueStatus": {
+      "type": "string",
+      "enum": ["not_requested", "recorded", "failed"],
+      "description": "not_requested = no rescue action; recorded = persisted to the rescue_flags table; failed = the rescue flag could not be persisted."
+    },
+    "Lifecycle": {
+      "type": "string",
+      "enum": ["idle", "running", "completed", "completed_with_failures", "no_devices", "failed"],
+      "description": "State of the event held by the supervisor. idle = no event held."
+    },
+    "CompletionStatus": {
+      "type": "string",
+      "enum": ["completed", "completed_with_failures", "no_devices", "failed"],
+      "description": "Terminal status of an event. completed = no failures; completed_with_failures = at least one failures.* counter > 0; no_devices = devices_in_radius == 0; failed = a fatal error stopped the pipeline."
+    },
+    "ErrorCode": {
+      "type": "string",
+      "enum": [
+        "CAMARA_TIMEOUT",
+        "CAMARA_ERROR",
+        "AGENT_ERROR",
+        "AGENT_INVALID_RESPONSE",
+        "SMS_FAILED",
+        "DB_ERROR",
+        "QOS_FAILED",
+        "INTERNAL_ERROR"
+      ],
+      "description": "Machine-readable error code. Whether an error is fatal is decided by the frame's `fatal` flag, never by the code."
+    },
+    "ErrorStage": {
+      "type": "string",
+      "enum": ["lookup", "context", "triage", "decision", "dispatch", "pipeline"],
+      "description": "Pipeline stage that produced the error."
+    },
+    "CongestionLevel": {
+      "type": "string",
+      "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL", "UNKNOWN"],
+      "description": "Network congestion level in the area. UNKNOWN when it could not be read or no device was available to probe."
+    },
+    "QosStatus": {
+      "type": "string",
+      "enum": ["inactive", "requested", "active", "failed"],
+      "description": "QoS on Demand session state."
+    },
+    "SheltersStatus": {
+      "type": "string",
+      "enum": ["ok", "unavailable"],
+      "description": "ok = the shelter query succeeded (the list may still be empty); unavailable = the database query failed."
+    },
+    "NetworkSource": {
+      "type": "string",
+      "enum": ["mock_camara", "nokia_nac"],
+      "description": "Network source DECLARED by the supervisor configuration. It is not verified: clients must present it as declared, never as a confirmed live network."
+    },
+    "SmsGateway": {
+      "type": "string",
+      "enum": ["configured", "not_configured"],
+      "description": "Whether an SMS gateway is configured. With not_configured nothing is ever reported as sent."
+    },
+    "ContractVersion": {"type": "integer", "const": 2, "description": "WebSocket contract version."},
+    "EventId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$",
+      "description": "Event id of an event frame. Events only start through POST /sensor, which enforces this pattern, so every frame carries a non-empty id in the same format."
+    },
+    "ControlEventId": {
+      "description": "Event id on a control frame: the event the supervisor currently holds (running, or the last finished one until the next event starts), or \"\" when it holds none.",
+      "anyOf": [{"type": "string", "const": ""}, {"$ref": "#/definitions/EventId"}]
+    },
+    "EventSeq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Per-event sequence. event_start is 1; every later frame of the event is previous + 1."
+    },
+    "ControlSeq": {"type": "integer", "const": 0, "description": "Control frames always carry seq 0."},
+    "EmitTimestamp": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Server emit time, Unix milliseconds. Replayed frames keep their original emit time."
+    },
+    "Phone": {
+      "type": "string",
+      "pattern": "^\\+[1-9]\\d{1,14}$",
+      "description": "E.164 phone number. Clients render it masked only."
+    },
+    "Coordinates": {
+      "type": "object",
+      "required": ["latitude", "longitude"],
+      "additionalProperties": false,
+      "properties": {
+        "latitude": {"type": "number", "minimum": -90, "maximum": 90},
+        "longitude": {"type": "number", "minimum": -180, "maximum": 180}
+      }
+    },
+    "ZoneBands": {
+      "description": "OUTER edge of each zone band as a fraction of radius_km (Go `zones` package constants). A device at distance d is red when d <= 0.33*radius_km, orange when d <= 0.66*radius_km, otherwise green. Go may encode green as the JSON number 1.",
+      "type": "object",
+      "required": ["red", "orange", "green"],
+      "additionalProperties": false,
+      "properties": {
+        "red": {"type": "number", "const": 0.33},
+        "orange": {"type": "number", "const": 0.66},
+        "green": {"type": "number", "const": 1.0}
+      }
+    },
+    "Shelter": {
+      "description": "Shelter record from the database (same shape as AgentRequest.nearest_shelters[]).",
+      "type": "object",
+      "required": ["name", "address", "location", "distance_km", "capacity"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "address": {"type": "string"},
+        "location": {"$ref": "#/definitions/Coordinates"},
+        "distance_km": {"type": "number", "minimum": 0, "description": "Distance from the epicentre in km (PostGIS)."},
+        "capacity": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of people the shelter can hold. There is no occupancy field: the database holds none."
         }
       }
     },
-    "EventStart": {
-      "title": "EventStart Payload",
-      "description": "type='event_start' — Disaster detected. React initialises the map and clears prior state.",
+    "NetworkContext": {
+      "type": "object",
+      "required": ["congestion_level", "qos_status"],
+      "additionalProperties": false,
+      "properties": {
+        "congestion_level": {"$ref": "#/definitions/CongestionLevel"},
+        "qos_status": {"$ref": "#/definitions/QosStatus"}
+      }
+    },
+    "ZoneStats": {
+      "description": "Counters for one zone, computed by Go from the latest state of every triaged device. reachable + unreachable == total.",
+      "type": "object",
+      "required": [
+        "total",
+        "reachable",
+        "unreachable",
+        "decided",
+        "decision_failed",
+        "sms_sent",
+        "sms_failed",
+        "rescue_flagged"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "total": {"type": "integer", "minimum": 0, "description": "Triaged devices in this zone."},
+        "reachable": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Devices whose CAMARA reachability_status is not NOT_CONNECTED."
+        },
+        "unreachable": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Devices whose reachability_status is NOT_CONNECTED (reported or assumed)."
+        },
+        "decided": {"type": "integer", "minimum": 0, "description": "Devices with stage decided."},
+        "decision_failed": {"type": "integer", "minimum": 0, "description": "Devices with stage decision_failed."},
+        "sms_sent": {"type": "integer", "minimum": 0, "description": "Devices with sms_status sent."},
+        "sms_failed": {"type": "integer", "minimum": 0, "description": "Devices with sms_status failed."},
+        "rescue_flagged": {"type": "integer", "minimum": 0, "description": "Devices with rescue_flag true."}
+      }
+    },
+    "FailureCounts": {
+      "type": "object",
+      "required": ["location", "reachability", "decision", "sms", "rescue"],
+      "additionalProperties": false,
+      "properties": {
+        "location": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "CAMARA location lookups that failed (device skipped)."
+        },
+        "reachability": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Reachability lookups that failed (NOT_CONNECTED assumed)."
+        },
+        "decision": {"type": "integer", "minimum": 0, "description": "Devices whose AI batch failed or was rejected."},
+        "sms": {"type": "integer", "minimum": 0, "description": "SMS the gateway rejected."},
+        "rescue": {"type": "integer", "minimum": 0, "description": "Rescue flags that could not be persisted."}
+      }
+    },
+    "FatalError": {
+      "description": "The fatal error that stopped the pipeline.",
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {"$ref": "#/definitions/ErrorCode"},
+        "message": {"type": "string", "minLength": 1, "not": {"pattern": "[0-9]{8}"}}
+      }
+    },
+    "SnapshotBeginPayload": {
+      "type": "object",
+      "required": ["head_seq", "active", "lifecycle"],
+      "additionalProperties": false,
+      "properties": {
+        "head_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Last seq issued for the held event; 0 when no event is held."
+        },
+        "active": {"type": "boolean", "description": "true iff a pipeline is running right now."},
+        "lifecycle": {"$ref": "#/definitions/Lifecycle"}
+      }
+    },
+    "SnapshotEndPayload": {
+      "type": "object",
+      "required": ["head_seq", "replayed"],
+      "additionalProperties": false,
+      "properties": {
+        "head_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Same head_seq as the snapshot_begin of this snapshot. Live frames that follow have seq > head_seq."
+        },
+        "replayed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of frames re-sent (replay: true) between snapshot_begin and snapshot_end."
+        }
+      }
+    },
+    "HeartbeatPayload": {
+      "type": "object",
+      "required": ["head_seq", "active", "lifecycle"],
+      "additionalProperties": false,
+      "properties": {
+        "head_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Last seq issued for the held event; 0 when no event is held."
+        },
+        "active": {"type": "boolean", "description": "true iff a pipeline is running right now."},
+        "lifecycle": {"$ref": "#/definitions/Lifecycle"}
+      }
+    },
+    "EventStartPayload": {
       "type": "object",
       "required": [
         "disaster_type",
         "severity",
         "epicenter",
         "radius_km",
+        "depth_km",
         "tsunami_risk",
-        "aftershock_risk"
+        "aftershock_risk",
+        "sensor_timestamp",
+        "zone_bands"
       ],
       "additionalProperties": false,
       "properties": {
-        "disaster_type": {
-          "type": "string",
-          "enum": [
-            "earthquake",
-            "flood",
-            "heatwave"
-          ]
+        "disaster_type": {"$ref": "#/definitions/DisasterType"},
+        "severity": {"type": "number", "minimum": 0, "maximum": 10},
+        "epicenter": {"$ref": "#/definitions/Coordinates"},
+        "radius_km": {"type": "number", "exclusiveMinimum": 0, "maximum": 500},
+        "depth_km": {"type": "number", "minimum": 0, "maximum": 800},
+        "tsunami_risk": {"type": "boolean"},
+        "aftershock_risk": {"$ref": "#/definitions/AftershockRisk"},
+        "sensor_timestamp": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "SensorInput.timestamp (Unix ms) of the accepted sensor report."
         },
-        "severity": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 10,
-          "example": 6.8
-        },
-        "epicenter": {
-          "$ref": "#/definitions/Coordinates"
-        },
-        "radius_km": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Estimated affected radius — used to draw the impact circle on the map",
-          "example": 50
-        },
-        "tsunami_risk": {
-          "type": "boolean",
-          "description": "Whether coastal tsunami risk is present — dashboard shows warning banner if true"
-        },
-        "aftershock_risk": {
-          "type": "string",
-          "enum": [
-            "LOW",
-            "MEDIUM",
-            "HIGH"
-          ],
-          "description": "Aftershock risk level — displayed to government official on dashboard"
-        }
+        "zone_bands": {"$ref": "#/definitions/ZoneBands"}
       }
     },
-    "DeviceUpdate": {
-      "title": "DeviceUpdate Payload",
-      "description": "type='device_update' — One dot appears or updates on the map. Sent per device as data streams in.",
+    "EventContextPayload": {
+      "description": "Area context. Latest wins: every event_context fully replaces the previous one.",
+      "type": "object",
+      "required": ["devices_in_radius", "shelters_status", "shelters", "network", "network_source", "sms_gateway"],
+      "additionalProperties": false,
+      "properties": {
+        "devices_in_radius": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Registered devices whose last-known position is inside the radius (database query result count)."
+        },
+        "shelters_status": {"$ref": "#/definitions/SheltersStatus"},
+        "shelters": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {"$ref": "#/definitions/Shelter"},
+          "description": "Up to 3 shelters nearest to the epicentre, nearest first. [] when none or when shelters_status is unavailable."
+        },
+        "network": {"$ref": "#/definitions/NetworkContext"},
+        "network_source": {"$ref": "#/definitions/NetworkSource"},
+        "sms_gateway": {"$ref": "#/definitions/SmsGateway"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"shelters_status": {"const": "unavailable"}}, "required": ["shelters_status"]},
+          "then": {"properties": {"shelters": {"maxItems": 0}}}
+        },
+        {
+          "if": {"properties": {"devices_in_radius": {"const": 0}}, "required": ["devices_in_radius"]},
+          "then": {
+            "properties": {
+              "network": {"properties": {"congestion_level": {"const": "UNKNOWN"}, "qos_status": {"const": "inactive"}}}
+            }
+          }
+        }
+      ]
+    },
+    "DeviceUpdatePayload": {
+      "description": "Full current state of one device; replaces the previous state for the same phone. Every located device produces at least two frames: stage triaged, then decided or decision_failed. `zone` is the Go haversine band and is authoritative. Frames never carry reasoning, sms_message or shelter_name.",
       "type": "object",
       "required": [
         "phone",
         "latitude",
         "longitude",
+        "location_accuracy_m",
         "zone",
+        "distance_km",
         "reachable",
+        "reachability_status",
+        "reachability_assumed",
+        "stage",
+        "action",
+        "zone_escalated",
+        "escalated_zone",
+        "rescue_priority",
+        "confidence",
+        "sms_status",
         "sms_sent",
-        "rescue_flag"
+        "rescue_flag",
+        "rescue_status"
       ],
       "additionalProperties": false,
       "properties": {
-        "phone": {
-          "type": "string",
-          "pattern": "^\\+[1-9]\\d{1,14}$",
-          "description": "E.164 format. Display masked on dashboard (e.g. +212 6** *** 678).",
-          "example": "+212612345678"
-        },
-        "latitude": {
-          "type": "number",
-          "minimum": -90,
-          "maximum": 90
-        },
-        "longitude": {
-          "type": "number",
-          "minimum": -180,
-          "maximum": 180
-        },
-        "zone": {
-          "type": "string",
-          "enum": [
-            "red",
-            "orange",
-            "green"
-          ],
-          "description": "Controls dot colour on map: red=#FF3B30, orange=#FF9500, green=#34C759"
-        },
-        "reachable": {
+        "phone": {"$ref": "#/definitions/Phone"},
+        "latitude": {"type": "number", "minimum": -90, "maximum": 90},
+        "longitude": {"type": "number", "minimum": -180, "maximum": 180},
+        "location_accuracy_m": {"type": "number", "minimum": 0, "description": "CAMARA location area radius in metres."},
+        "zone": {"$ref": "#/definitions/Zone"},
+        "distance_km": {"type": "number", "minimum": 0, "description": "Go haversine distance from the epicentre."},
+        "reachable": {"type": "boolean", "description": "reachability_status != NOT_CONNECTED."},
+        "reachability_status": {"$ref": "#/definitions/ReachabilityStatus"},
+        "reachability_assumed": {
           "type": "boolean",
-          "description": "true if reachability_status is CONNECTED_DATA or CONNECTED_SMS"
+          "description": "true when the reachability lookup failed and NOT_CONNECTED was assumed."
         },
-        "sms_sent": {
-          "type": "boolean",
-          "description": "true if Go successfully dispatched an SMS for this device"
+        "stage": {"$ref": "#/definitions/Stage"},
+        "action": {
+          "description": "AI action; null unless stage is decided.",
+          "oneOf": [{"$ref": "#/definitions/Action"}, {"type": "null"}]
         },
-        "rescue_flag": {
-          "type": "boolean",
-          "description": "true if AI flagged this device for rescue dispatch"
+        "zone_escalated": {"type": "boolean", "description": "AI escalation annotation (display only). Never changes `zone`."},
+        "escalated_zone": {
+          "description": "Zone the AI escalated to (strictly more severe than `zone`); null unless zone_escalated is true.",
+          "oneOf": [{"$ref": "#/definitions/Zone"}, {"type": "null"}]
+        },
+        "rescue_priority": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "description": "0 = no rescue; 1 = most urgent ... 10 = least urgent."
+        },
+        "confidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "AI per-device confidence; null unless stage is decided."
+        },
+        "sms_status": {"$ref": "#/definitions/SmsStatus"},
+        "sms_sent": {"type": "boolean", "description": "true iff sms_status is sent."},
+        "rescue_flag": {"type": "boolean", "description": "true iff action is rescue_flag or both, in ANY zone."},
+        "rescue_status": {"$ref": "#/definitions/RescueStatus"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"reachability_status": {"const": "NOT_CONNECTED"}},
+            "required": ["reachability_status"]
+          },
+          "then": {"properties": {"reachable": {"const": false}}},
+          "else": {"properties": {"reachable": {"const": true}}}
+        },
+        {
+          "if": {"properties": {"stage": {"const": "decided"}}, "required": ["stage"]},
+          "then": {"properties": {"action": {"$ref": "#/definitions/Action"}, "confidence": {"type": "number"}}},
+          "else": {
+            "properties": {"action": {"type": "null"}, "confidence": {"type": "null"}, "zone_escalated": {"const": false}}
+          }
+        },
+        {
+          "if": {"properties": {"zone_escalated": {"const": true}}, "required": ["zone_escalated"]},
+          "then": {"properties": {"escalated_zone": {"$ref": "#/definitions/Zone"}}},
+          "else": {"properties": {"escalated_zone": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"zone": {"const": "red"}}, "required": ["zone"]},
+          "then": {"properties": {"zone_escalated": {"const": false}}}
+        },
+        {
+          "if": {"properties": {"zone": {"const": "orange"}}, "required": ["zone"]},
+          "then": {"properties": {"escalated_zone": {"enum": ["red", null]}}}
+        },
+        {
+          "if": {"properties": {"zone": {"const": "green"}}, "required": ["zone"]},
+          "then": {"properties": {"escalated_zone": {"enum": ["orange", "red", null]}}}
+        },
+        {
+          "if": {"properties": {"sms_status": {"const": "sent"}}, "required": ["sms_status"]},
+          "then": {"properties": {"sms_sent": {"const": true}}},
+          "else": {"properties": {"sms_sent": {"const": false}}}
+        },
+        {
+          "if": {"properties": {"action": {"enum": ["sms", "both"]}}, "required": ["action"]},
+          "then": {"properties": {"sms_status": {"enum": ["sent", "failed", "not_configured"]}}},
+          "else": {"properties": {"sms_status": {"const": "not_requested"}}}
+        },
+        {
+          "if": {"properties": {"action": {"enum": ["rescue_flag", "both"]}}, "required": ["action"]},
+          "then": {
+            "properties": {
+              "rescue_flag": {"const": true},
+              "rescue_priority": {"minimum": 1},
+              "rescue_status": {"enum": ["recorded", "failed"]}
+            }
+          },
+          "else": {
+            "properties": {
+              "rescue_flag": {"const": false},
+              "rescue_priority": {"const": 0},
+              "rescue_status": {"const": "not_requested"}
+            }
+          }
+        }
+      ]
+    },
+    "ZoneSummaryPayload": {
+      "description": "Cumulative state (NOT an increment): every zone_summary replaces the previous one. Emitted after triage and after every AI batch.",
+      "type": "object",
+      "required": ["red", "orange", "green", "devices_in_radius", "triaged", "location_failed"],
+      "additionalProperties": false,
+      "properties": {
+        "red": {"$ref": "#/definitions/ZoneStats"},
+        "orange": {"$ref": "#/definitions/ZoneStats"},
+        "green": {"$ref": "#/definitions/ZoneStats"},
+        "devices_in_radius": {"type": "integer", "minimum": 0, "description": "Same value as event_context.devices_in_radius."},
+        "triaged": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Devices located and triaged (sum of the three zone totals)."
+        },
+        "location_failed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Devices skipped because their CAMARA location lookup failed."
         }
       }
     },
-    "ZoneSummary": {
-      "title": "ZoneSummary Payload",
-      "description": "type='zone_summary' — Sidebar counters update. Sent after each zone batch completes processing.",
+    "NarrativePayload": {
+      "description": "Latest narrative per zone replaces the previous one for that zone.",
       "type": "object",
-      "required": [
-        "red_total",
-        "red_reachable",
-        "red_rescue",
-        "orange_total",
-        "orange_reachable",
-        "green_total",
-        "green_reachable"
-      ],
+      "required": ["zone", "narrative", "batch_index"],
       "additionalProperties": false,
       "properties": {
-        "red_total": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Total devices in red zone"
-        },
-        "red_reachable": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Reachable devices in red zone"
-        },
-        "red_rescue": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Devices flagged for rescue in red zone"
-        },
-        "orange_total": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "orange_reachable": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "green_total": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "green_reachable": {
-          "type": "integer",
-          "minimum": 0
-        }
-      }
-    },
-    "NarrativeUpdate": {
-      "title": "NarrativeUpdate Payload",
-      "description": "type='narrative_update' — AI situation report text displayed to government official. Replaces previous narrative for the same zone.",
-      "type": "object",
-      "required": [
-        "zone",
-        "narrative"
-      ],
-      "additionalProperties": false,
-      "properties": {
-        "zone": {
-          "type": "string",
-          "enum": [
-            "red",
-            "orange",
-            "green"
-          ],
-          "description": "Which zone this narrative covers"
-        },
+        "zone": {"$ref": "#/definitions/Zone"},
         "narrative": {
           "type": "string",
-          "description": "AI-generated plain-text situation report. No PII. Max ~500 chars for dashboard display.",
           "minLength": 1,
-          "example": "Red zone: 12 devices within 5km of epicenter. 9 reachable via SMS — evacuation messages sent. 3 unreachable — rescue teams dispatched. Network congestion HIGH, QoS boost active."
+          "maxLength": 2000,
+          "description": "AI situation report (gov_narrative). Go masks anything that looks like a phone number before publishing, so it never holds a run of 8 or more digits.",
+          "not": {"pattern": "[0-9]{8}"}
+        },
+        "batch_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "AI batch that produced the narrative (0-based, increments per request)."
         }
       }
     },
-    "ErrorUpdate": {
-      "title": "ErrorUpdate Payload",
-      "description": "type='error' — Something failed. Dashboard shows warning to government official.",
+    "ErrorPayload": {
       "type": "object",
-      "required": [
-        "code",
-        "message",
-        "phone",
-        "fatal"
-      ],
+      "required": ["code", "message", "phone", "fatal", "stage"],
       "additionalProperties": false,
       "properties": {
-        "code": {
-          "type": "string",
-          "enum": [
-            "CAMARA_TIMEOUT",
-            "AGENT_ERROR",
-            "SMS_FAILED",
-            "DB_ERROR",
-            "QOS_FAILED"
-          ],
-          "description": "Machine-readable error code"
-        },
+        "code": {"$ref": "#/definitions/ErrorCode"},
         "message": {
           "type": "string",
-          "description": "Human-readable error description for dashboard display",
-          "example": "CAMARA Location API timeout after 5s for device +212612345678"
+          "minLength": 1,
+          "description": "Human-readable text. Never contains a phone number (upstream text passes through models.RedactPhones), so it never holds a run of 8 or more digits.",
+          "not": {"pattern": "[0-9]{8}"}
         },
         "phone": {
-          "type": "string",
-          "description": "E.164 phone if error is device-specific, empty string otherwise",
-          "example": "+212612345678"
+          "description": "E.164 phone when the error is device-specific, otherwise \"\".",
+          "anyOf": [{"type": "string", "const": ""}, {"$ref": "#/definitions/Phone"}]
         },
         "fatal": {
           "type": "boolean",
-          "description": "true = pipeline stopped and cannot continue. Dashboard should show critical alert."
-        }
+          "description": "true iff the pipeline stops because of this error. A fatal error is always followed by event_complete with status failed."
+        },
+        "stage": {"$ref": "#/definitions/ErrorStage"}
       }
+    },
+    "EventCompletePayload": {
+      "description": "Terminal lifecycle frame, sent exactly once per event. Nothing is published for the event after it.",
+      "type": "object",
+      "required": [
+        "status",
+        "duration_ms",
+        "devices_in_radius",
+        "devices_triaged",
+        "devices_decided",
+        "failures",
+        "sms_not_sent_no_gateway",
+        "fatal_error"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"$ref": "#/definitions/CompletionStatus"},
+        "duration_ms": {"type": "integer", "minimum": 0, "description": "Pipeline wall time in milliseconds."},
+        "devices_in_radius": {"type": "integer", "minimum": 0},
+        "devices_triaged": {"type": "integer", "minimum": 0},
+        "devices_decided": {"type": "integer", "minimum": 0},
+        "failures": {"$ref": "#/definitions/FailureCounts"},
+        "sms_not_sent_no_gateway": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Decisions that asked for an SMS while no SMS gateway is configured. It does not by itself make the status completed_with_failures, but clients must state it."
+        },
+        "fatal_error": {
+          "description": "The fatal error when status is failed, otherwise null.",
+          "oneOf": [{"$ref": "#/definitions/FatalError"}, {"type": "null"}]
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "failed"}}, "required": ["status"]},
+          "then": {"properties": {"fatal_error": {"$ref": "#/definitions/FatalError"}}},
+          "else": {"properties": {"fatal_error": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"status": {"const": "completed"}}, "required": ["status"]},
+          "then": {
+            "properties": {
+              "failures": {
+                "properties": {
+                  "location": {"const": 0},
+                  "reachability": {"const": 0},
+                  "decision": {"const": 0},
+                  "sms": {"const": 0},
+                  "rescue": {"const": 0}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"status": {"const": "completed_with_failures"}}, "required": ["status"]},
+          "then": {
+            "properties": {
+              "failures": {
+                "anyOf": [
+                  {"properties": {"location": {"minimum": 1}}, "required": ["location"]},
+                  {"properties": {"reachability": {"minimum": 1}}, "required": ["reachability"]},
+                  {"properties": {"decision": {"minimum": 1}}, "required": ["decision"]},
+                  {"properties": {"sms": {"minimum": 1}}, "required": ["sms"]},
+                  {"properties": {"rescue": {"minimum": 1}}, "required": ["rescue"]}
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"status": {"const": "no_devices"}}, "required": ["status"]},
+          "then": {
+            "properties": {
+              "devices_in_radius": {"const": 0},
+              "devices_triaged": {"const": 0},
+              "devices_decided": {"const": 0}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"devices_in_radius": {"const": 0}}, "required": ["devices_in_radius"]},
+          "then": {"properties": {"status": {"enum": ["no_devices", "failed"]}}}
+        }
+      ]
     }
   },
   "examples": [
     {
-      "event_start": {
-        "type": "event_start",
-        "event_id": "EQ-2024-001",
-        "timestamp": 1700000000000,
-        "payload": {
-            "disaster_type": "earthquake",
-            "severity": 6.8,
-            "epicenter": { "latitude": 33.9716, "longitude": -6.8498 },
-            "radius_km": 50.0,
-            "tsunami_risk": false,
-            "aftershock_risk": "HIGH"
-        }
-      },
-      "device_update": {
-        "type": "device_update",
-        "event_id": "EQ-2024-001",
-        "timestamp": 1700000005000,
-        "payload": {
-            "phone": "+212612345678",
-            "latitude": 33.9716,
-            "longitude": -6.8498,
-            "zone": "red",
-            "reachable": true,
-            "sms_sent": true,
-            "rescue_flag": false
-        }
-      },
-      "zone_summary": {
-        "type": "zone_summary",
-        "event_id": "EQ-2024-001",
-        "timestamp": 1700000010000,
-        "payload": {
-            "red_total": 12,
-            "red_reachable": 9,
-            "red_rescue": 3,
-            "orange_total": 47,
-            "orange_reachable": 38,
-            "green_total": 203,
-            "green_reachable": 198
-        }
-      },
-      "narrative_update": {
-        "type": "narrative_update",
-        "event_id": "EQ-2024-001",
-        "timestamp": 1700000012000,
-        "payload": {
-            "zone": "red",
-            "narrative": "Red zone: 12 devices within 5km of epicenter. 9 reachable via SMS — evacuation messages sent. 3 unreachable — rescue teams dispatched. Network congestion HIGH, QoS boost active."
-        }
-      },
-      "error": {
-        "type": "error",
-        "event_id": "EQ-2024-001",
-        "timestamp": 1700000007000,
-        "payload": {
-            "code": "SMS_FAILED",
-            "message": "SMS delivery failed for device after 3 retries",
-            "phone": "+212698765432",
-            "fatal": false
-        }
+      "v": 2,
+      "type": "snapshot_begin",
+      "event_id": "",
+      "seq": 0,
+      "timestamp": 1757699980000,
+      "replay": false,
+      "payload": {"head_seq": 0, "active": false, "lifecycle": "idle"}
+    },
+    {
+      "v": 2,
+      "type": "snapshot_end",
+      "event_id": "",
+      "seq": 0,
+      "timestamp": 1757699980001,
+      "replay": false,
+      "payload": {"head_seq": 0, "replayed": 0}
+    },
+    {
+      "v": 2,
+      "type": "heartbeat",
+      "event_id": "",
+      "seq": 0,
+      "timestamp": 1757699995000,
+      "replay": false,
+      "payload": {"head_seq": 0, "active": false, "lifecycle": "idle"}
+    },
+    {
+      "v": 2,
+      "type": "event_start",
+      "event_id": "EQ-20260912-0001",
+      "seq": 1,
+      "timestamp": 1757700000000,
+      "replay": false,
+      "payload": {
+        "disaster_type": "earthquake",
+        "severity": 6.8,
+        "epicenter": {"latitude": 33.5731, "longitude": -7.5898},
+        "radius_km": 20,
+        "depth_km": 10.5,
+        "tsunami_risk": false,
+        "aftershock_risk": "HIGH",
+        "sensor_timestamp": 1757699999000,
+        "zone_bands": {"red": 0.33, "orange": 0.66, "green": 1.0}
       }
+    },
+    {
+      "v": 2,
+      "type": "event_context",
+      "event_id": "EQ-20260912-0001",
+      "seq": 2,
+      "timestamp": 1757700000180,
+      "replay": false,
+      "payload": {
+        "devices_in_radius": 40,
+        "shelters_status": "ok",
+        "shelters": [
+          {
+            "name": "Lycée Technique de Casablanca",
+            "address": "Rue Abderrahmane Sahraoui, Casablanca",
+            "location": {"latitude": 33.58, "longitude": -7.575},
+            "distance_km": 1.57,
+            "capacity": 800
+          },
+          {
+            "name": "Mohamed V Cultural Center Shelter",
+            "address": "Av. des F.A.R., Casablanca 20000",
+            "location": {"latitude": 33.5892, "longitude": -7.601},
+            "distance_km": 2.07,
+            "capacity": 2000
+          },
+          {
+            "name": "Casablanca Stadium Emergency Shelter",
+            "address": "Complexe Mohammed V, Bd Zerktouni, Casablanca",
+            "location": {"latitude": 33.595, "longitude": -7.623},
+            "distance_km": 3.92,
+            "capacity": 5000
+          }
+        ],
+        "network": {"congestion_level": "HIGH", "qos_status": "requested"},
+        "network_source": "mock_camara",
+        "sms_gateway": "not_configured"
+      }
+    },
+    {
+      "v": 2,
+      "type": "device_update",
+      "event_id": "EQ-20260912-0001",
+      "seq": 3,
+      "timestamp": 1757700000420,
+      "replay": false,
+      "payload": {
+        "phone": "+212600000001",
+        "latitude": 33.5731,
+        "longitude": -7.5898,
+        "location_accuracy_m": 500,
+        "zone": "red",
+        "distance_km": 0.0,
+        "reachable": false,
+        "reachability_status": "NOT_CONNECTED",
+        "reachability_assumed": false,
+        "stage": "triaged",
+        "action": null,
+        "zone_escalated": false,
+        "escalated_zone": null,
+        "rescue_priority": 0,
+        "confidence": null,
+        "sms_status": "not_requested",
+        "sms_sent": false,
+        "rescue_flag": false,
+        "rescue_status": "not_requested"
+      }
+    },
+    {
+      "v": 2,
+      "type": "error",
+      "event_id": "EQ-20260912-0001",
+      "seq": 19,
+      "timestamp": 1757700005440,
+      "replay": false,
+      "payload": {
+        "code": "CAMARA_TIMEOUT",
+        "message": "location lookup timed out after 5000 ms; device skipped",
+        "phone": "+212600000017",
+        "fatal": false,
+        "stage": "triage"
+      }
+    },
+    {
+      "v": 2,
+      "type": "heartbeat",
+      "event_id": "EQ-20260912-0001",
+      "seq": 0,
+      "timestamp": 1757700010000,
+      "replay": false,
+      "payload": {"head_seq": 43, "active": true, "lifecycle": "running"}
+    },
+    {
+      "v": 2,
+      "type": "device_update",
+      "event_id": "EQ-20260912-0001",
+      "seq": 44,
+      "timestamp": 1757700016210,
+      "replay": false,
+      "payload": {
+        "phone": "+212600000001",
+        "latitude": 33.5731,
+        "longitude": -7.5898,
+        "location_accuracy_m": 500,
+        "zone": "red",
+        "distance_km": 0.0,
+        "reachable": false,
+        "reachability_status": "NOT_CONNECTED",
+        "reachability_assumed": false,
+        "stage": "decided",
+        "action": "rescue_flag",
+        "zone_escalated": false,
+        "escalated_zone": null,
+        "rescue_priority": 1,
+        "confidence": 0.97,
+        "sms_status": "not_requested",
+        "sms_sent": false,
+        "rescue_flag": true,
+        "rescue_status": "recorded"
+      }
+    },
+    {
+      "v": 2,
+      "type": "device_update",
+      "event_id": "EQ-20260912-0001",
+      "seq": 47,
+      "timestamp": 1757700016240,
+      "replay": false,
+      "payload": {
+        "phone": "+212600000004",
+        "latitude": 33.575,
+        "longitude": -7.585,
+        "location_accuracy_m": 500,
+        "zone": "red",
+        "distance_km": 0.49,
+        "reachable": true,
+        "reachability_status": "CONNECTED_SMS",
+        "reachability_assumed": false,
+        "stage": "decided",
+        "action": "sms",
+        "zone_escalated": false,
+        "escalated_zone": null,
+        "rescue_priority": 0,
+        "confidence": 0.88,
+        "sms_status": "not_configured",
+        "sms_sent": false,
+        "rescue_flag": false,
+        "rescue_status": "not_requested"
+      }
+    },
+    {
+      "v": 2,
+      "type": "narrative_update",
+      "event_id": "EQ-20260912-0001",
+      "seq": 65,
+      "timestamp": 1757700016400,
+      "replay": false,
+      "payload": {
+        "zone": "red",
+        "narrative": "Red zone: 20 devices assessed. 11 reachable, evacuation SMS requested. 9 not connected, flagged for rescue. Network congestion HIGH; QoS boost requested.",
+        "batch_index": 0
+      }
+    },
+    {
+      "v": 2,
+      "type": "device_update",
+      "event_id": "EQ-20260912-0001",
+      "seq": 81,
+      "timestamp": 1757700038120,
+      "replay": false,
+      "payload": {
+        "phone": "+212600000033",
+        "latitude": 33.63,
+        "longitude": -7.46,
+        "location_accuracy_m": 500,
+        "zone": "green",
+        "distance_km": 13.59,
+        "reachable": true,
+        "reachability_status": "CONNECTED_DATA",
+        "reachability_assumed": false,
+        "stage": "decided",
+        "action": "sms",
+        "zone_escalated": true,
+        "escalated_zone": "orange",
+        "rescue_priority": 0,
+        "confidence": 0.74,
+        "sms_status": "not_configured",
+        "sms_sent": false,
+        "rescue_flag": false,
+        "rescue_status": "not_requested"
+      }
+    },
+    {
+      "v": 2,
+      "type": "zone_summary",
+      "event_id": "EQ-20260912-0001",
+      "seq": 88,
+      "timestamp": 1757700038300,
+      "replay": false,
+      "payload": {
+        "red": {
+          "total": 20,
+          "reachable": 11,
+          "unreachable": 9,
+          "decided": 20,
+          "decision_failed": 0,
+          "sms_sent": 0,
+          "sms_failed": 0,
+          "rescue_flagged": 9
+        },
+        "orange": {
+          "total": 12,
+          "reachable": 11,
+          "unreachable": 1,
+          "decided": 12,
+          "decision_failed": 0,
+          "sms_sent": 0,
+          "sms_failed": 0,
+          "rescue_flagged": 1
+        },
+        "green": {
+          "total": 7,
+          "reachable": 7,
+          "unreachable": 0,
+          "decided": 7,
+          "decision_failed": 0,
+          "sms_sent": 0,
+          "sms_failed": 0,
+          "rescue_flagged": 0
+        },
+        "devices_in_radius": 40,
+        "triaged": 39,
+        "location_failed": 1
+      }
+    },
+    {
+      "v": 2,
+      "type": "event_complete",
+      "event_id": "EQ-20260912-0001",
+      "seq": 90,
+      "timestamp": 1757700038500,
+      "replay": false,
+      "payload": {
+        "status": "completed_with_failures",
+        "duration_ms": 38500,
+        "devices_in_radius": 40,
+        "devices_triaged": 39,
+        "devices_decided": 39,
+        "failures": {"location": 1, "reachability": 0, "decision": 0, "sms": 0, "rescue": 0},
+        "sms_not_sent_no_gateway": 29,
+        "fatal_error": null
+      }
+    },
+    {
+      "v": 2,
+      "type": "snapshot_begin",
+      "event_id": "EQ-20260912-0001",
+      "seq": 0,
+      "timestamp": 1757700060000,
+      "replay": false,
+      "payload": {"head_seq": 90, "active": false, "lifecycle": "completed_with_failures"}
+    },
+    {
+      "v": 2,
+      "type": "event_start",
+      "event_id": "EQ-20260912-0001",
+      "seq": 1,
+      "timestamp": 1757700000000,
+      "replay": true,
+      "payload": {
+        "disaster_type": "earthquake",
+        "severity": 6.8,
+        "epicenter": {"latitude": 33.5731, "longitude": -7.5898},
+        "radius_km": 20,
+        "depth_km": 10.5,
+        "tsunami_risk": false,
+        "aftershock_risk": "HIGH",
+        "sensor_timestamp": 1757699999000,
+        "zone_bands": {"red": 0.33, "orange": 0.66, "green": 1.0}
+      }
+    },
+    {
+      "v": 2,
+      "type": "snapshot_end",
+      "event_id": "EQ-20260912-0001",
+      "seq": 0,
+      "timestamp": 1757700060002,
+      "replay": false,
+      "payload": {"head_seq": 90, "replayed": 47}
     }
   ]
 }

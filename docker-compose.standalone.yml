@@ -1,0 +1,117 @@
+# Self-contained development stack: Postgres + PostGIS, the supervisor and
+# BOTH development mocks (CAMARA and the rule-based AI agent). No deploy
+# repository and no .env file are needed.
+#
+#   docker compose -f docker-compose.standalone.yml up -d --build
+#
+# docker-compose.dev.yml cannot run on its own: it is the file the deploy
+# repository includes, and deploy adds mock_camara and the Python agent itself.
+#
+# Host ports: 8080 supervisor, 8081 mock CAMARA, 8082 mock agent, 5432
+# Postgres. Nothing uses 5000, which macOS reserves for the AirPlay Receiver.
+#
+# The project name keeps the database volume (supervisor_postgres_dev_data)
+# shared with docker-compose.dev.yml. Its init scripts, including the
+# DEVELOPMENT FIXTURE seeds, run only when that volume is first created.
+
+name: supervisor
+
+services:
+
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: geodispatch_postgres_dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       geodispatch
+      POSTGRES_USER:     geodispatch
+      POSTGRES_PASSWORD: geodispatch
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+      - ./migrations/002_events.sql:/docker-entrypoint-initdb.d/002_events.sql:ro
+      - ./scripts/seed/seed_shelters.sql:/docker-entrypoint-initdb.d/003_seed_shelters.sql:ro
+      - ./scripts/seed/seed_devices.sql:/docker-entrypoint-initdb.d/004_seed_devices.sql:ro
+      - ./scripts/seed/seed_demo_areas.sql:/docker-entrypoint-initdb.d/005_seed_demo_areas.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geodispatch -d geodispatch"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  mock_camara:
+    build:
+      context: .
+      dockerfile: scripts/camara/Dockerfile
+    container_name: geodispatch_mock_camara
+    restart: unless-stopped
+    # Each lookup answers after up to 300 ms, as a real network API would, so
+    # an event's devices stream onto the map over a second or two.
+    environment:
+      MOCK_CAMARA_LATENCY_MS: "300"
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+  mock_agent:
+    build:
+      context: .
+      dockerfile: scripts/agent/Dockerfile
+    container_name: geodispatch_mock_agent
+    restart: unless-stopped
+    # 0.4 s per batch of twenty: decisions land batch by batch, red first.
+    environment:
+      MOCK_AGENT_DELAY_MS: "400"
+    ports:
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+  supervisor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: geodispatch_supervisor_dev
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock_camara:
+        condition: service_healthy
+      mock_agent:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    # Optional local settings (e.g. NOKIA_NAC_API_KEY for the real CAMARA
+    # sandbox). The addresses below are set explicitly and win over it: they
+    # are the container-network names of this file's own services.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://geodispatch:geodispatch@postgres:5432/geodispatch?sslmode=disable
+      MOCK_NOKIA_NAC_BASE_URL: http://mock_camara:8081
+      AGENT_URL: http://mock_agent:8082/decide
+    # Liveness only: /health is readiness and answers 503 while a dependency
+    # is down, which should show on the dashboard rather than block startup.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/livez || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  postgres_dev_data:

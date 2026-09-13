@@ -1,5 +1,9 @@
 FROM golang:1.22-alpine AS builder
 
+# Set by BuildKit for the target platform; plain `docker build` leaves it
+# empty, hence the amd64 fallback.
+ARG TARGETARCH
+
 RUN apk add --no-cache git
 
 WORKDIR /app
@@ -9,7 +13,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
     go build -ldflags="-s -w" -o /supervisor ./cmd/supervisor
 
 FROM alpine:3.19

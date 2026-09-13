@@ -1,8 +1,8 @@
 package zones
 
 import (
-	"math"
 	"github.com/geodispatch/supervisor/internal/models"
+	"math"
 )
 
 func Haversine(p1, p2 models.Coordinates) float64 {

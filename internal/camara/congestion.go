@@ -1,17 +1,27 @@
 package camara
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"net/url"
 	"time"
 
-	"github.com/geodispatch/supervisor/config"
 	"github.com/geodispatch/supervisor/internal/models"
 )
+
+// Placeholder webhook used when CONGESTION_WEBHOOK_URL/TOKEN are unset. The
+// Nokia API requires a webhook on every subscription, but the supervisor only
+// ever reads the level synchronously, so nothing is delivered to it.
+const (
+	placeholderWebhookURL   = "http://example.com/notify"
+	placeholderWebhookToken = "c8974e592f9fh683d4a3960714"
+)
+
+// subscriptionCleanupTimeout bounds the best-effort DELETE of a congestion
+// subscription, which also runs after the caller's ctx has ended.
+const subscriptionCleanupTimeout = 2 * time.Second
 
 type congestionSubscriptionRequest struct {
 	Device struct {
@@ -24,124 +34,107 @@ type congestionSubscriptionRequest struct {
 	SubscriptionExpireTime string `json:"subscriptionExpireTime"`
 }
 
-func GetCongestion(ctx context.Context, cfg *config.Config, epicenter models.Coordinates, phone string) (models.CongestionLevel, error) {
-	if cfg.IsReal() {
-		return getRealCongestion(ctx, cfg, epicenter, phone)
+// Congestion returns the network congestion level around the device.
+//
+// Mock mode makes no network call and always reports HIGH (the mock CAMARA
+// server has no congestion endpoint). Real mode creates a Nokia congestion
+// subscription, queries it and deletes it again. On error the level is
+// UNKNOWN.
+func (c *Client) Congestion(ctx context.Context, epicenter models.Coordinates, phone string) (models.CongestionLevel, error) {
+	if !c.cfg.IsReal() {
+		return models.CongestionHigh, nil
 	}
-	return getMockCongestion()
-}
-
-func getRealCongestion(ctx context.Context, cfg *config.Config, epicenter models.Coordinates, phone string) (models.CongestionLevel, error) {
-	subID, err := createCongestionSubscription(ctx, cfg, phone)
+	subID, err := c.createCongestionSubscription(ctx, phone)
 	if err != nil {
 		return models.CongestionUnknown, err
 	}
-	defer deleteCongestionSubscription(ctx, cfg, subID)
-	return fetchCongestion(ctx, cfg, phone)
+	defer c.deleteCongestionSubscription(ctx, subID)
+	return c.fetchCongestion(ctx, phone)
 }
 
-func newCongestionBody(cfg *config.Config, phone string) congestionSubscriptionRequest {
+func (c *Client) congestionBody(phone string) ([]byte, error) {
 	var body congestionSubscriptionRequest
-	body.Device.PhoneNumber = phone
-	body.Webhook.NotificationURL = cfg.CongestionWebhookURL
-	body.Webhook.NotificationAuthToken = cfg.CongestionWebhookToken
+	body.Device.PhoneNumber = normalisePhone(phone)
+	body.Webhook.NotificationURL = c.cfg.CongestionWebhookURL
+	body.Webhook.NotificationAuthToken = c.cfg.CongestionWebhookToken
 	if body.Webhook.NotificationURL == "" {
-		body.Webhook.NotificationURL = "http://example.com/notify"
+		body.Webhook.NotificationURL = placeholderWebhookURL
 	}
 	if body.Webhook.NotificationAuthToken == "" {
-		body.Webhook.NotificationAuthToken = "c8974e592f9fh683d4a3960714"
+		body.Webhook.NotificationAuthToken = placeholderWebhookToken
 	}
 	body.SubscriptionExpireTime = time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)
-	return body
+	return json.Marshal(body)
 }
 
-func createCongestionSubscription(ctx context.Context, cfg *config.Config, phone string) (string, error) {
-	bodyBytes, _ := json.Marshal(newCongestionBody(cfg, phone))
-
-	reqURL := fmt.Sprintf("%s/congestion-insights/v0/subscriptions", cfg.NokiaNacBaseURL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
+func (c *Client) createCongestionSubscription(ctx context.Context, phone string) (string, error) {
+	const op = "congestion"
+	b, err := c.congestionBody(phone)
 	if err != nil {
-		return "", fmt.Errorf("build create subscription request: %w", err)
+		return "", &Error{Op: op, Detail: "encode request: " + err.Error()}
 	}
-	rapidAPIHeaders(req, cfg)
-
-	resp, err := http.DefaultClient.Do(req)
+	raw, err := c.postReal(ctx, op, "/congestion-insights/v0/subscriptions", b, http.StatusCreated)
 	if err != nil {
-		return "", fmt.Errorf("create subscription request: %w", err)
+		return "", err
 	}
-	defer resp.Body.Close()
-
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("create subscription %d: %s", resp.StatusCode, raw)
-	}
-
 	var result struct {
 		SubscriptionID string `json:"subscriptionId"`
 	}
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return "", fmt.Errorf("decode subscription response: %w", err)
+		return "", decodeError(op, http.StatusCreated, err)
 	}
 	if result.SubscriptionID == "" {
-		return "", fmt.Errorf("empty subscriptionId in response: %s", raw)
+		return "", decodeError(op, http.StatusCreated, fmt.Errorf("empty subscriptionId"))
 	}
 	return result.SubscriptionID, nil
 }
 
-func fetchCongestion(ctx context.Context, cfg *config.Config, phone string) (models.CongestionLevel, error) {
-	bodyBytes, _ := json.Marshal(newCongestionBody(cfg, phone))
-
-	reqURL := fmt.Sprintf("%s/congestion-insights/v0/query", cfg.NokiaNacBaseURL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
+func (c *Client) fetchCongestion(ctx context.Context, phone string) (models.CongestionLevel, error) {
+	const op = "congestion"
+	b, err := c.congestionBody(phone)
 	if err != nil {
-		return models.CongestionUnknown, fmt.Errorf("build fetch request: %w", err)
+		return models.CongestionUnknown, &Error{Op: op, Detail: "encode request: " + err.Error()}
 	}
-	rapidAPIHeaders(req, cfg)
-
-	resp, err := http.DefaultClient.Do(req)
+	raw, err := c.postReal(ctx, op, "/congestion-insights/v0/query", b, http.StatusOK)
 	if err != nil {
-		return models.CongestionUnknown, fmt.Errorf("fetch congestion request: %w", err)
-	}
-	if resp.StatusCode == 429 {
-		return models.CongestionUnknown, nil
-	}
-	defer resp.Body.Close()
-
-	raw, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode != http.StatusOK {
-		return models.CongestionUnknown, fmt.Errorf("fetch congestion %d: %s", resp.StatusCode, raw)
+		return models.CongestionUnknown, err
 	}
 
-	var results []models.CAMARACongestionResponse
-	if err := json.Unmarshal(raw, &results); err == nil {
-		if len(results) == 0 {
-			return models.CongestionUnknown, fmt.Errorf("empty congestion response")
+	// The API answers with either a list of insights (newest first) or a
+	// single object.
+	var level models.CongestionLevel
+	var list []models.CAMARACongestionResponse
+	if err := json.Unmarshal(raw, &list); err == nil {
+		if len(list) == 0 {
+			return models.CongestionUnknown, decodeError(op, http.StatusOK, fmt.Errorf("empty congestion list"))
 		}
-		return results[0].Level, nil
+		level = list[0].Level
+	} else {
+		var one models.CAMARACongestionResponse
+		if err := json.Unmarshal(raw, &one); err != nil {
+			return models.CongestionUnknown, decodeError(op, http.StatusOK, err)
+		}
+		level = one.Level
 	}
-
-	var result models.CAMARACongestionResponse
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return models.CongestionUnknown, fmt.Errorf("decode congestion: %w", err)
+	// event_context only allows the contract's levels.
+	switch level {
+	case models.CongestionLow, models.CongestionMedium, models.CongestionHigh, models.CongestionCritical:
+		return level, nil
 	}
-	return result.Level, nil
+	return models.CongestionUnknown, decodeError(op, http.StatusOK, fmt.Errorf("unknown congestion level %q", level))
 }
 
-func deleteCongestionSubscription(ctx context.Context, cfg *config.Config, subID string) {
-	reqURL := fmt.Sprintf("%s/congestion-insights/v0/subscriptions/%s", cfg.NokiaNacBaseURL, subID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, reqURL, nil)
+// deleteCongestionSubscription is best effort: the subscription expires by
+// itself after five minutes. It gets its own short deadline so it still runs
+// when ctx has already been cancelled.
+func (c *Client) deleteCongestionSubscription(ctx context.Context, subID string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), subscriptionCleanupTimeout)
+	defer cancel()
+	u := c.cfg.NokiaNacBaseURL + "/congestion-insights/v0/subscriptions/" + url.PathEscape(subID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
 	if err != nil {
 		return
 	}
-	rapidAPIHeaders(req, cfg)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil || resp == nil {
-		return
-	}
-	resp.Body.Close()
-}
-
-func getMockCongestion() (models.CongestionLevel, error) {
-	return models.CongestionHigh, nil
+	c.rapidAPIHeaders(req)
+	_, _ = c.do(req, "congestion cleanup", http.StatusOK, http.StatusAccepted, http.StatusNoContent, http.StatusNotFound)
 }

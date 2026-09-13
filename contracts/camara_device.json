@@ -2,7 +2,14 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "camara_device",
   "title": "CAMARADevice",
-  "description": "Nokia NaC CAMARA API response shapes for Location, Reachability, Verification, and Congestion. These are raw responses preserved exactly as returned by the network APIs before Go processing.",
+  "description": "Nokia NaC CAMARA API response shapes for Location, Reachability, Verification, and Congestion, plus the TriagedDevice Go builds from them. The CAMARA responses are raw responses preserved exactly as returned by the network APIs before Go processing. An instance of this contract is exactly one of these shapes.",
+  "oneOf": [
+    { "$ref": "#/definitions/CAMARALocationResponse" },
+    { "$ref": "#/definitions/CAMARAReachabilityResponse" },
+    { "$ref": "#/definitions/CAMARAVerificationResponse" },
+    { "$ref": "#/definitions/CAMARACongestionResponse" },
+    { "$ref": "#/definitions/TriagedDevice" }
+  ],
   "definitions": {
     "Coordinates": {
       "type": "object",
@@ -196,38 +203,36 @@
   },
   "examples": [
     {
-      "location_response": {
-      "lastLocationTime": "2024-11-14T10:30:00Z",
+      "lastLocationTime": "2026-08-18T10:00:00Z",
       "area": {
-          "areaType": "CIRCLE",
-          "center": { "latitude": 33.9716, "longitude": -6.8498 },
-          "radius": 500
-        }
-      },
-      "reachability_response": {
-        "lastStatusTime": "2024-11-14T10:29:45Z",
-        "reachabilityStatus": "CONNECTED_SMS"
-      },
-      "verification_response": {
-        "verificationResult": "PARTIAL",
-        "matchRate": 72,
-        "lastLocationTime": "2024-11-14T10:30:00Z"
-      },
-      "congestion_response": {
-        "level": "HIGH",
-        "timestamp": "2024-11-14T10:30:00Z"
-      },
-      "triaged_device": {
-        "phone": "+212612345678",
-        "latitude": 33.9716,
-        "longitude": -6.8498,
-        "location_radius_m": 500,
-        "last_location_time": "2024-11-14T10:30:00Z",
-        "reachability_status": "CONNECTED_SMS",
-        "last_status_time": "2024-11-14T10:29:45Z",
-        "zone": "red",
-        "distance_km": 3.7
+        "areaType": "CIRCLE",
+        "center": { "latitude": 33.575, "longitude": -7.585 },
+        "radius": 500
       }
+    },
+    {
+      "lastStatusTime": "2026-08-18T10:00:00Z",
+      "reachabilityStatus": "CONNECTED_SMS"
+    },
+    {
+      "verificationResult": "PARTIAL",
+      "matchRate": 72,
+      "lastLocationTime": "2026-08-18T10:00:00Z"
+    },
+    {
+      "level": "HIGH",
+      "timestamp": "2026-08-18T10:00:00Z"
+    },
+    {
+      "phone": "+212600000004",
+      "latitude": 33.575,
+      "longitude": -7.585,
+      "location_radius_m": 500,
+      "last_location_time": "2026-08-18T10:00:00Z",
+      "reachability_status": "CONNECTED_SMS",
+      "last_status_time": "2026-08-18T10:00:00Z",
+      "zone": "red",
+      "distance_km": 0.49
     }
-   ]
+  ]
 }

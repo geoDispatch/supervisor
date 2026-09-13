@@ -194,18 +194,29 @@ cp .env.example .env
 ### Full development stack (all services + database)
 
 ```bash
-# Start everything
-docker-compose -f docker-compose.dev.yml up
+# Start everything (docker-compose.dev.yml is the deploy repository's include
+# and does not run on its own)
+docker compose -f docker-compose.standalone.yml up -d --build
 
-# In another terminal, trigger a disaster event
-go run scripts/simulate_disaster.go --event evt-001 --severity 6.8
+# Watch the stream, then trigger a disaster event
+go run ./scripts/simulation/wswatch
+go run ./scripts/simulation/sensor -h
 ```
 
 This boots:
-- PostgreSQL 16 + PostGIS (with automatic seed data)
-- Mock CAMARA server (location/reachability/QoS)
-- Mock AI Agent server (zone-based decisions)
-- Supervisor (ready to receive events on `http://localhost:8080/sensor`)
+- PostgreSQL 16 + PostGIS on `:5432` (seeded on first volume creation)
+- Mock CAMARA on `:8081` — DEVELOPMENT FIXTURE subscribers around real towns
+  in Casablanca, Al Haouz and Agadir (`scripts/camara/areas.go`)
+- Mock AI agent on `:8082` (rule-based, earthquake only). Not 5000: macOS
+  keeps that port for AirPlay
+- Supervisor on `:8080`
+
+The mocks are paced for demos (`MOCK_CAMARA_LATENCY_MS=300`,
+`MOCK_AGENT_DELAY_MS=400` in the standalone file). After changing
+`scripts/camara/areas.go`, regenerate the seed with
+`go test ./scripts/camara -run TestDemoSeedIsCurrent -update` and apply it to
+an existing volume with
+`docker exec -i geodispatch_postgres_dev psql -U geodispatch -d geodispatch < scripts/seed/seed_demo_areas.sql`.
 
 ### Production Compose (Postgres + Supervisor only)
 
@@ -239,7 +250,7 @@ SERVER_PORT=8080
 
 # MOCK SERVER PORTS (Local Testing)
 MOCK_CAMARA_PORT=8081
-MOCK_AGENT_PORT=5000
+MOCK_AGENT_PORT=8082
 
 # NOKIA NETWORK AS CODE — CAMARA
 NOKIA_NAC_BASE_URL=https://network-as-code.nokia.rapidapi.com
@@ -254,7 +265,7 @@ NOKIA_NAC_API_KEY=
 CAMARA_LOCATION_MAX_AGE_SEC=600
 
 # AI AGENT
-AGENT_URL=http://mock_agent:5000/decide
+AGENT_URL=http://mock_agent:8082/decide
 
 # DATABASE
 DATABASE_URL="postgres://geodispatch:geodispatch@postgres:5432/geodispatch?sslmode=disable"

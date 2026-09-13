@@ -5,40 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
+	"math"
 	"net/http"
-	"net/url"
-	"strings"
 
-	"github.com/geodispatch/supervisor/config"
 	"github.com/geodispatch/supervisor/internal/models"
 )
-
-// ── shared HTTP helpers ───────────────────────────────────────
-
-func rapidAPIHeaders(req *http.Request, cfg *config.Config) {
-	req.Header.Set("x-rapidapi-key", cfg.NokiaNacAPIKey)
-	req.Header.Set("x-rapidapi-host", cfg.NokiaNacHost)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-}
-
-func normalisePhone(phone string) string {
-	phone = strings.TrimSpace(phone)
-	if strings.HasPrefix(phone, "+") {
-		return phone
-	}
-	return "+" + phone
-}
-
-// ── Location ─────────────────────────────────────────────────
-
-func GetLocation(ctx context.Context, cfg *config.Config, phone string) (*models.CAMARALocationResponse, error) {
-	if cfg.IsReal() {
-		return getRealLocation(ctx, cfg, phone)
-	}
-	return getMockLocation(ctx, cfg, phone)
-}
 
 type locationRetrieveRequest struct {
 	Device struct {
@@ -47,66 +18,62 @@ type locationRetrieveRequest struct {
 	MaxAge int `json:"maxAge"`
 }
 
-func getRealLocation(ctx context.Context, cfg *config.Config, phone string) (*models.CAMARALocationResponse, error) {
-	var body locationRetrieveRequest
-	body.Device.PhoneNumber = normalisePhone(phone)
-	body.MaxAge = cfg.CAMARALocationMaxAgeSec
-
-	bodyBytes, err := json.Marshal(body)
+// Location returns the device's last known position (CAMARA Location
+// Retrieval). Real mode: POST /location-retrieval/v0/retrieve. Mock mode:
+// GET /location?phone=. A 404 wraps ErrNotFound.
+func (c *Client) Location(ctx context.Context, phone string) (*models.CAMARALocationResponse, error) {
+	const op = "location"
+	var raw []byte
+	var err error
+	if c.cfg.IsReal() {
+		var body locationRetrieveRequest
+		body.Device.PhoneNumber = normalisePhone(phone)
+		body.MaxAge = c.cfg.CAMARALocationMaxAgeSec
+		b, mErr := json.Marshal(body)
+		if mErr != nil {
+			return nil, &Error{Op: op, Detail: "encode request: " + mErr.Error()}
+		}
+		raw, err = c.postReal(ctx, op, "/location-retrieval/v0/retrieve", b, http.StatusOK)
+	} else {
+		raw, err = c.getMock(ctx, op, "/location", phone)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("marshal location request: %w", err)
+		return nil, err
 	}
-
-	reqURL := fmt.Sprintf("%s/location-retrieval/v0/retrieve", cfg.NokiaNacBaseURL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("build retrieve request: %w", err)
-	}
-	rapidAPIHeaders(req, cfg)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("location retrieve: %w", err)
-	}
-	defer resp.Body.Close()
-
-	raw, _ := io.ReadAll(resp.Body)
-
-	switch resp.StatusCode {
-	case http.StatusOK:
-	case http.StatusUnauthorized:
-		return nil, fmt.Errorf("camara 401 – invalid API key: %s", raw)
-	case http.StatusNotFound:
-		return nil, fmt.Errorf("camara 404 – device not locatable: %s", raw)
-	default:
-		return nil, fmt.Errorf("camara %d: %s", resp.StatusCode, raw)
-	}
-
-	var result models.CAMARALocationResponse
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return nil, fmt.Errorf("decode location response: %w", err)
-	}
-	return &result, nil
+	return parseLocation(raw)
 }
 
-func getMockLocation(ctx context.Context, cfg *config.Config, phone string) (*models.CAMARALocationResponse, error) {
-	encodedPhone := url.QueryEscape(phone)
-	reqURL := fmt.Sprintf("%s/location?phone=%s", cfg.MockNokiaNacBaseURL, encodedPhone)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("build mock request: %w", err)
+// parseLocation decodes and checks a location body. Only CIRCLE areas are
+// representable; a missing centre would otherwise decode as (0, 0) and put
+// the device in the Gulf of Guinea without anyone noticing.
+func parseLocation(raw []byte) (*models.CAMARALocationResponse, error) {
+	const op = "location"
+	var probe struct {
+		Area struct {
+			Center json.RawMessage `json:"center"`
+		} `json:"area"`
 	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("mock location: %w", err)
+	var out models.CAMARALocationResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, decodeError(op, http.StatusOK, err)
 	}
-	defer resp.Body.Close()
-
-	var result models.CAMARALocationResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode mock location: %w", err)
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil, decodeError(op, http.StatusOK, err)
 	}
-	return &result, nil
+	a := out.Area
+	switch {
+	case a.AreaType != "CIRCLE":
+		return nil, decodeError(op, http.StatusOK, fmt.Errorf("unsupported area type %q", a.AreaType))
+	case len(probe.Area.Center) == 0 || bytes.Equal(probe.Area.Center, []byte("null")):
+		return nil, decodeError(op, http.StatusOK, fmt.Errorf("area has no center"))
+	case !inRange(a.Center.Lat, -90, 90) || !inRange(a.Center.Lng, -180, 180):
+		return nil, decodeError(op, http.StatusOK, fmt.Errorf("center out of range"))
+	case !inRange(a.Radius, 0, math.MaxFloat64):
+		return nil, decodeError(op, http.StatusOK, fmt.Errorf("negative or invalid area radius"))
+	}
+	return &out, nil
+}
+
+func inRange(v, lo, hi float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= lo && v <= hi
 }

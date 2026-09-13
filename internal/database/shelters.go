@@ -47,7 +47,9 @@ func (db *DB) NearestShelters(
 	center models.Coordinates,
 	limit int,
 ) ([]models.Shelter, error) {
-
+	if err := db.ready(); err != nil {
+		return nil, err
+	}
 	rows, err := db.pool.QueryContext(
 		ctx,
 		nearestSheltersSQL,

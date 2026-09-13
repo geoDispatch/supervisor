@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -40,13 +41,30 @@ func Connect(ctx context.Context, databaseURL string) (*DB, error) {
 	return &DB{pool: pool}, nil
 }
 
+// errNoDB is returned by methods called on a nil *DB (no database
+// configured) instead of panicking.
+var errNoDB = errors.New("database: not connected")
+
+func (db *DB) ready() error {
+	if db == nil || db.pool == nil {
+		return errNoDB
+	}
+	return nil
+}
+
 func (db *DB) Close() error {
+	if db.ready() != nil {
+		return nil
+	}
 	return db.pool.Close()
 }
 
 // HealthCheck performs a lightweight round-trip to confirm the pool is alive.
 // The /health HTTP handler can call this to expose DB liveness.
 func (db *DB) HealthCheck(ctx context.Context) error {
+	if err := db.ready(); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	return db.pool.PingContext(ctx)

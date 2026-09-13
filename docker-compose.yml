@@ -12,12 +12,14 @@ services:
     ports:
       - "5432:5432"
 
+    # The init scripts (schema + DEVELOPMENT FIXTURE seeds) run only when the
+    # postgres_data volume is first created. Recreate it (down -v) to re-seed.
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
       - ./migrations/002_events.sql:/docker-entrypoint-initdb.d/002_events.sql:ro
       - ./scripts/seed/seed_shelters.sql:/docker-entrypoint-initdb.d/003_seed_shelters.sql:ro
-      - ./scripts/seed/seed_devices.sql:/docker-entrypoint-initdb.d/004_seed_devices.sql:ro 
+      - ./scripts/seed/seed_devices.sql:/docker-entrypoint-initdb.d/004_seed_devices.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U geodispatch -d geodispatch"]
       interval: 5s
@@ -39,15 +41,24 @@ services:
     ports:
       - "8080:8080"
 
+    # Both layouts work: ../.env when this file is included from the deploy
+    # repository, .env when the supervisor runs standalone. Either may be
+    # absent; when both exist, .env (later) wins for keys set in both.
     env_file:
-      - ../.env
+      - path: ../.env
+        required: false
+      - path: .env
+        required: false
 
     # Makes host.docker.internal resolve correctly on Linux
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+    # Liveness only: /health is readiness and answers 503 while the agent or
+    # database is down. Services waiting on service_healthy (the dashboard)
+    # should still start and show that state instead of blocking.
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/livez || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
