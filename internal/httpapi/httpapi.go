@@ -118,8 +118,10 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.Handle("/sensor", a.opts.Origins.CORS(http.HandlerFunc(a.sensor)))
 	mux.Handle("/health", a.opts.Origins.CORS(http.HandlerFunc(a.health)))
 	mux.Handle("/capabilities", a.opts.Origins.CORS(http.HandlerFunc(a.capabilitiesHandler)))
+	
 	// Liveness is for orchestrators, not browsers: no CORS.
 	mux.HandleFunc("/livez", livez)
+	registerSwagger(mux)
 
 	// ── auth routes ───────────────────────────────────────────
 	// Only mounted when GormDB and JWTSecret are provided.
@@ -130,6 +132,12 @@ func (a *API) Register(mux *http.ServeMux) {
 
 		// ── /api/* — rate-limited + JWT-or-API-key protected ─
 		a.registerREST(mux)
+
+		// ── /api/keys — JWT-only for create and list, JWT-or-key for delete ─
+		keysH := newKeysHandler(a.opts.GormDB, a.opts.JWTSecret)
+		mux.Handle("GET /api/keys",         a.protected(http.HandlerFunc(keysH.list)))
+		mux.Handle("POST /api/keys",        auth.JWTMiddleware(a.opts.JWTSecret, http.HandlerFunc(keysH.create)))
+		mux.Handle("DELETE /api/keys/{id}", a.protected(http.HandlerFunc(keysH.delete)))
 	} else {
 		log.Printf("[http] WARNING: GormDB or JWTSecret not set — /auth and /api routes are disabled")
 	}

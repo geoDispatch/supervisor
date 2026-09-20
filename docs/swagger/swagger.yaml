@@ -1,0 +1,256 @@
+basePath: /
+host: localhost:8080
+info:
+  contact:
+    name: GeoDispatch
+  description: 'Disaster response orchestration API. Use POST /auth/login to obtain
+    a JWT, then pass it as "Authorization: Bearer <token>" on all /api/ routes. Alternatively
+    supply an X-API-Key header.'
+  license:
+    name: MIT
+  title: GeoDispatch Supervisor API
+  version: "1.0"
+paths:
+  /api/keys:
+    get:
+      description: Returns all API keys in the system. key_hash is never included.
+        Requires JWT auth.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              properties:
+                created_at:
+                  type: string
+                id:
+                  type: string
+                label:
+                  type: string
+                user_id:
+                  type: string
+              type: object
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List all API keys
+      tags:
+      - keys
+    post:
+      consumes:
+      - application/json
+      description: Generates a new API key for the authenticated user. The raw key
+        is returned once and never stored — save it immediately.
+      parameters:
+      - description: Optional label
+        in: body
+        name: body
+        schema:
+          properties:
+            label:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            properties:
+              created_at:
+                type: string
+              id:
+                type: string
+              key:
+                type: string
+              label:
+                type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Create an API key
+      tags:
+      - keys
+  /api/keys/{id}:
+    delete:
+      description: Permanently deletes an API key by its UUID. Returns 204 on success.
+      parameters:
+      - description: API Key UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      security:
+      - BearerAuth: []
+      - APIKeyAuth: []
+      summary: Revoke an API key
+      tags:
+      - keys
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      description: 'Validates credentials and returns a signed JWT (24 h TTL). Pass
+        it as "Authorization: Bearer <token>" on /api/ routes.'
+      parameters:
+      - description: Credentials
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            email:
+              type: string
+            password:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              token:
+                type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      summary: Login
+      tags:
+      - auth
+  /auth/register:
+    post:
+      consumes:
+      - application/json
+      description: Creates an operator account. Returns the created user (no token
+        — call /auth/login next).
+      parameters:
+      - description: Credentials
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            email:
+              type: string
+            password:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            properties:
+              created_at:
+                type: string
+              email:
+                type: string
+              id:
+                type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      summary: Register a new user
+      tags:
+      - auth
+securityDefinitions:
+  APIKeyAuth:
+    in: header
+    name: X-API-Key
+    type: apiKey
+  BearerAuth:
+    description: Type "Bearer" followed by a space and the JWT token.
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"
