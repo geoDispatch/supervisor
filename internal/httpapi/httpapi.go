@@ -16,6 +16,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"gorm.io/gorm"
+
+	"github.com/geodispatch/supervisor/internal/auth"
 	"github.com/geodispatch/supervisor/internal/models"
 	"github.com/geodispatch/supervisor/internal/origin"
 	"github.com/geodispatch/supervisor/internal/pipeline"
@@ -63,12 +66,18 @@ type Options struct {
 	Checks       []Check
 	WSStats      func() WSStats // nil reports zeros
 	CheckTimeout time.Duration  // ≤ 0 means DefaultCheckTimeout
+
+	// Auth — wired in Phase 2.
+	GormDB       *gorm.DB // used by auth handlers and REST endpoints
+	JWTSecret    string   // signs and verifies JWT tokens
+	RateLimitRPS int      // requests/sec per IP on /api/; ≤ 0 means no limit
 }
 
 // API holds the handlers. Build it with New.
 type API struct {
 	opts         Options
 	capabilities []byte
+	limiter      *auth.RateLimiter // nil when RateLimitRPS ≤ 0
 }
 
 // New builds the API.
@@ -80,17 +89,63 @@ func New(opts Options) *API {
 	if err != nil { // static data: cannot fail
 		panic(err)
 	}
-	return &API{opts: opts, capabilities: caps}
+	a := &API{opts: opts, capabilities: caps}
+	if opts.RateLimitRPS > 0 {
+		a.limiter = auth.NewRateLimiter(opts.RateLimitRPS)
+	}
+	return a
 }
 
-// Register adds /sensor, /health, /capabilities (behind the CORS middleware)
-// and /livez to mux.
+// Register adds all routes to mux.
+//
+// Existing routes (unchanged):
+//
+//	POST /sensor
+//	GET  /health
+//	GET  /capabilities
+//	GET  /livez
+//
+// New auth routes (Phase 2):
+//
+//	POST /auth/register
+//	POST /auth/login
+//
+// New REST routes (Phase 3 — added in rest.go):
+//
+//	/api/* — protected by JWTOrAPIKey + rate limiter
 func (a *API) Register(mux *http.ServeMux) {
+	// ── existing routes ───────────────────────────────────────
 	mux.Handle("/sensor", a.opts.Origins.CORS(http.HandlerFunc(a.sensor)))
 	mux.Handle("/health", a.opts.Origins.CORS(http.HandlerFunc(a.health)))
 	mux.Handle("/capabilities", a.opts.Origins.CORS(http.HandlerFunc(a.capabilitiesHandler)))
 	// Liveness is for orchestrators, not browsers: no CORS.
 	mux.HandleFunc("/livez", livez)
+
+	// ── auth routes ───────────────────────────────────────────
+	// Only mounted when GormDB and JWTSecret are provided.
+	if a.opts.GormDB != nil && a.opts.JWTSecret != "" {
+		authH := newAuthHandler(a.opts.GormDB, a.opts.JWTSecret)
+		mux.HandleFunc("POST /auth/register", authH.register)
+		mux.HandleFunc("POST /auth/login", authH.login)
+
+		// ── /api/* — rate-limited + JWT-or-API-key protected ─
+		a.registerREST(mux)
+	} else {
+		log.Printf("[http] WARNING: GormDB or JWTSecret not set — /auth and /api routes are disabled")
+	}
+}
+
+// rateLimit wraps h with the per-IP limiter when one is configured.
+func (a *API) rateLimit(h http.Handler) http.Handler {
+	if a.limiter == nil {
+		return h
+	}
+	return a.limiter.Middleware(h)
+}
+
+// protected wraps h with rate limiting and JWT-or-API-key auth.
+func (a *API) protected(h http.Handler) http.Handler {
+	return a.rateLimit(auth.JWTOrAPIKey(a.opts.JWTSecret, a.opts.GormDB, h))
 }
 
 // ── POST /sensor ──────────────────────────────────────────────
