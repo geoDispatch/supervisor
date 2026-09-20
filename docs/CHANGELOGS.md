@@ -375,14 +375,317 @@
       - Clarified broadcast stage intent (triage broadcast vs dispatch broadcast)
       - Reduced ambiguity in map-update and timing tracking sections
 
+────────────────────────────────────────────────────────────────
+  v0.8.2 => v0.9.0                                      [MINOR]
+────────────────────────────────────────────────────────────────
+  + Docker Compose deployment alignment
+      - Updated PostgreSQL credentials to use:
+          POSTGRES_USER=geodispatch
+          POSTGRES_PASSWORD=geodispatch
+      - Updated PostgreSQL health checks to match the new credentials
+      - Added automatic seed mounts for:
+          scripts/seed/seed_shelters.sql
+          scripts/seed/seed_devices.sql
+
+  · Environment file resolution improved
+      - Updated Compose services to load environment variables from:
+          ../.env
+      - Better aligned supervisor execution with the surrounding deploy
+        repository layout
+
+  / Development stack simplified
+      - Removed the embedded mock AI agent from `docker-compose.dev.yml`
+      - Removed the supervisor dependency on the containerized mock agent
+      - Prepared the stack to use an externally managed AI service
+
+────────────────────────────────────────────────────────────────
+  v0.9.0 => v1.0.0                                      [MAJOR]
+────────────────────────────────────────────────────────────────
+  + Deterministic large-scale disaster simulation
+      - Replaced the fixed 40-device CAMARA fixture with a generated
+        300-device simulation dataset
+      - Added deterministic random generation using a fixed seed
+      - Generated device locations across three operational zones:
+          RED     — 150 devices within approximately 0–5 km
+          ORANGE  — 100 devices within approximately 5–10 km
+          GREEN   — 50 devices within approximately 10–15 km
+      - Generated zone-specific reachability distributions:
+          RED     — high proportion of disconnected devices
+          ORANGE  — mixed SMS/data reachability
+          GREEN   — predominantly data-connected devices
+
+  + Database seed profile expanded
+      - Replaced the previous 40-device seed with 300 generated device
+        records
+      - Preserved the Casablanca/Morocco disaster simulation geography
+      - Maintained PostGIS point-based device locations
+
+  · Mock CAMARA service modernization
+      - Converted hardcoded location and reachability maps into generated
+        fixtures
+      - Added deterministic coordinate generation around the epicenter
+      - Updated mock response timestamps for the September 2026 simulation
+      - Kept mock behavior reproducible across container restarts
+
+  / Development Compose cleanup
+      - Removed the mock CAMARA service from `docker-compose.dev.yml`
+      - Prepared the supervisor stack for externally supplied CAMARA data
+        or a separate mock deployment
+
+────────────────────────────────────────────────────────────────
+  v1.0.0 => v1.1.0                                      [MAJOR]
+────────────────────────────────────────────────────────────────
+  + Dashboard simulation and WebSocket contract v2 foundation
+      - Reworked the dashboard transport around structured WebSocket v2
+        envelopes
+      - Added contract versioning, sequence numbers, replay flags, and
+        event lifecycle metadata
+      - Added support for:
+          snapshot_begin
+          snapshot_end
+          heartbeat
+          event_start
+          event_context
+          device_update
+          zone_summary
+          narrative_update
+          error
+          event_complete
+
+  + Reliable dashboard event replay
+      - Added an in-memory event recorder for the currently held incident
+      - Added late-client snapshots with deterministic replay ordering
+      - Preserved the latest state for:
+          device updates
+          event context
+          zone summaries
+          zone narratives
+      - Added bounded replay storage for the latest 100 error frames
+      - Retained completed events until the next event begins
+
+  + WebSocket reliability and lifecycle handling
+      - Added per-client buffered queues and dedicated writer goroutines
+      - Added heartbeat frames and WebSocket ping/pong handling
+      - Added slow-client detection and 1013 backpressure disconnects
+      - Added graceful WebSocket shutdown with close code 1001
+      - Added origin allowlisting for browser WebSocket upgrades
+      - Added WebSocket health statistics:
+          connected clients
+          published frames
+          slow-client disconnects
+          maximum queue depth
+
+  + Supervisor runtime refactor
+      - Reduced `cmd/supervisor/main.go` to application wiring and lifecycle
+        management
+      - Moved pipeline orchestration into `internal/pipeline`
+      - Moved HTTP handling into `internal/httpapi`
+      - Added coordinated shutdown for:
+          HTTP server
+          running pipelines
+          WebSocket clients
+          database connections
+
+  + Configuration and environment hardening
+      - Added development and production environment profiles
+      - Added configurable browser origin allowlists
+      - Added configurable CAMARA, agent, pipeline, sensor, and WebSocket
+        timeouts
+      - Added agent batch-size clamping to the supported range of 1–20
+      - Added configurable WebSocket queue and heartbeat limits
+      - Added explicit SMS gateway configuration state
+      - Changed the local mock agent port from 5000 to 8082 to avoid macOS
+        AirPlay Receiver conflicts
+
+  + CAMARA and AI client reliability improvements
+      - Added shared HTTP clients with configured timeouts
+      - Added response body size limits
+      - Added strict JSON decoding and unknown-field rejection
+      - Added structured client errors with timeout and cancellation support
+      - Added redacted upstream error snippets to prevent phone-number leakage
+      - Added CAMARA response validation for:
+          location area type
+          coordinate ranges
+          radius values
+          reachability status
+          congestion levels
+      - Added agent health probing through the sibling `/health` endpoint
+
+  + QoS and congestion client consolidation
+      - Unified CAMARA mock and real-network client behavior
+      - Added per-client QoS session storage
+      - Added QoS session extension and recreation after expiry
+      - Added best-effort congestion subscription cleanup
+      - Added support for both object and array congestion responses
+      - Added safe fallback behavior for unknown congestion states
+
+  + Database and pipeline safeguards
+      - Added database readiness checks before executing operations
+      - Added nil-database protection
+      - Added database test coverage for event insertion, rescue flags, and
+        device logs
+      - Added phone redaction to database and network error messages
+      - Added strict tests for timeouts, malformed responses, body limits,
+        replay behavior, reconnects, origin policy, and slow clients
+
+  + Standalone development stack
+      - Added `docker-compose.standalone.yml`
+      - Added a self-contained local stack containing:
+          PostgreSQL/PostGIS
+          mock CAMARA
+          mock AI agent
+          supervisor
+      - Added paced mock latency for dashboard demonstrations
+      - Added development fixture seed support through:
+          scripts/seed/seed_demo_areas.sql
+
+  · Contract governance updated
+      - Replaced the previous standalone contract documentation with
+        synchronized canonical contract guidance
+      - Added contract v2 references and synchronization instructions
+      - Expanded JSON schemas with stricter validation rules for sensor,
+        CAMARA, AI, and WebSocket payloads
+
+────────────────────────────────────────────────────────────────
+  v1.1.0 => v1.2.0                                      [MAJOR]
+────────────────────────────────────────────────────────────────
+  + ORM and authentication persistence foundation
+      - Added GORM PostgreSQL integration alongside the existing database
+        connection layer
+      - Added `internal/database/orm.go` with pooled GORM connections
+      - Preserved the existing raw SQL pipeline database path
+      - Added ORM models for:
+          users
+          api_keys
+          devices
+          shelters
+          events
+          device_logs
+          rescue_flags
+
+  + Authentication database migration
+      - Added `migrations/003_auth.sql`
+      - Created the `users` table for operator accounts
+      - Created the `api_keys` table for machine-to-machine access
+      - Added UUID identifiers and foreign-key cascade behavior
+      - Added indexes for user email and API-key ownership
+
+  + Authentication configuration
+      - Added `JWT_SECRET` configuration
+      - Added configurable per-IP API rate limiting through
+        `RATE_LIMIT_RPS`
+      - Updated `.env.example` with authentication and rate-limit settings
+      - Added startup warnings when JWT configuration is missing
+
+  + Supervisor database lifecycle integration
+      - Opened a dedicated GORM database handle during supervisor startup
+      - Passed the GORM handle into the HTTP API layer
+      - Added graceful GORM connection shutdown
+      - Preserved the existing PostgreSQL pool for pipeline operations
+
+  + Configuration system expansion
+      - Added environment normalization for development and production modes
+      - Added explicit origin-list parsing
+      - Added configurable:
+          CAMARA timeouts
+          agent timeout
+          agent batch size
+          pipeline timeout
+          sensor body limit
+          WebSocket queue limit
+          WebSocket write timeout
+          WebSocket heartbeat interval
+      - Added network-source reporting for mock CAMARA versus Nokia NaC
+      - Added SMS gateway configuration status reporting
+
+  + Agent and CAMARA integration hardening
+      - Added strict agent response validation
+      - Added malformed-response and oversized-body protection
+      - Added structured timeout and cancellation errors
+      - Added shared CAMARA client infrastructure for mock and real modes
+      - Added response validation and phone-redacted error handling
+      - Added test coverage for network failures, authentication failures,
+        malformed payloads, timeouts, and response limits
+
+  + Contract v2 alignment
+      - Added stricter sensor input validation:
+          event ID format and length
+          timestamp bounds
+          severity limits
+          radius limits
+          depth limits
+      - Added a maximum AI batch size of 20 devices
+      - Expanded CAMARA contract schemas with explicit `oneOf` response
+        definitions
+      - Updated WebSocket contract documentation for replay, lifecycle,
+        error, dispatch, and completion states
+
+────────────────────────────────────────────────────────────────
+  v1.2.0 => v1.3.0                                      [MAJOR]
+────────────────────────────────────────────────────────────────
+  + JWT authentication implemented
+      - Added `internal/auth/jwt.go`
+      - Added signed access tokens using HMAC-SHA256
+      - Added 24-hour token lifetime
+      - Added user ID and email claims
+      - Added signing-method validation during token verification
+      - Added protection against invalid or expired tokens
+
+  + Password security layer added
+      - Added bcrypt password hashing
+      - Added bcrypt password verification
+      - Standardized password hashing with bcrypt cost 12
+      - Ensured passwords are never serialized through ORM models
+
+  + HTTP authentication middleware
+      - Added JWT Bearer-token middleware
+      - Added API-key middleware backed by the `api_keys` table
+      - Added combined JWT-or-API-key authentication
+      - Added request-context claim propagation
+      - Added clear unauthorized responses for:
+          missing_token
+          invalid_token
+          missing_api_key
+          invalid_api_key
+          server_error
+
+  + Per-IP API rate limiting
+      - Added token-bucket rate limiting through `golang.org/x/time/rate`
+      - Added configurable requests-per-second limits
+      - Added automatic stale client pruning
+      - Added `Retry-After` responses for rejected requests
+      - Added support for `X-Forwarded-For` client identification
+
+  + HTTP API authentication wiring
+      - Extended `internal/httpapi.Options` with:
+          GormDB
+          JWTSecret
+          RateLimitRPS
+      - Added authenticated route registration for:
+          POST /auth/register
+          POST /auth/login
+          /api/*
+      - Protected REST endpoints with JWT-or-API-key authentication
+      - Applied rate limiting to protected API routes
+      - Kept existing sensor, health, capabilities, liveness, and WebSocket
+        routes available through the existing API registration flow
+
+  + Runtime integration
+      - Added GORM initialization to supervisor startup
+      - Connected JWT and rate-limit configuration to the HTTP server
+      - Added GORM shutdown handling alongside the existing PostgreSQL pool
+      - Added startup diagnostics for missing JWT configuration
+
 ════════════════════════════════════════════════════════════════
                         CURRENT RELEASE
 ════════════════════════════════════════════════════════════════
 
-  BUILD STATUS:     ✅ STABILIZATION PHASE (PIPELINE + DASHBOARD POLISH)
-  VERSION:          v0.8.0
-  RELEASE DATE:     August 23, 2026
-  FOCUS:            Websocket reliability, QoS/Congestion alignment, runtime polish
+  BUILD STATUS:     ✅ AUTHENTICATION + API SECURITY PHASE
+  VERSION:          v1.3.0
+  RELEASE DATE:     September 20, 2026
+  FOCUS:            JWT/API-key authentication, bcrypt credentials,
+                    rate limiting, WebSocket v2 reliability, and
+                    production-oriented runtime hardening
 
 ════════════════════════════════════════════════════════════════
   Legend:  + Added          · Changed             / Fixed
