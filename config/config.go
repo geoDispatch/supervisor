@@ -68,6 +68,12 @@ type Config struct {
 
 	CongestionWebhookURL   string
 	CongestionWebhookToken string
+
+	// Auth — used by internal/auth (Phase 2).
+	// JWT_SECRET must be set in production; a missing value is fatal at startup.
+	JWTSecret string
+	// RateLimitRPS is the maximum requests per second per IP on /api/ routes.
+	RateLimitRPS int
 }
 
 func Load() *Config {
@@ -112,6 +118,9 @@ func Load() *Config {
 
 		CongestionWebhookURL:   os.Getenv("CONGESTION_WEBHOOK_URL"),
 		CongestionWebhookToken: os.Getenv("CONGESTION_WEBHOOK_TOKEN"),
+
+		JWTSecret:    os.Getenv("JWT_SECRET"),
+		RateLimitRPS: intEnv("RATE_LIMIT_RPS", 10),
 	}
 }
 

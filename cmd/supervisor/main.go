@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/geodispatch/supervisor/config"
 	"github.com/geodispatch/supervisor/internal/agent"
 	"github.com/geodispatch/supervisor/internal/camara"
@@ -29,8 +31,8 @@ import (
 // Shutdown budget. `docker stop` sends SIGKILL 10 s after SIGTERM, so the
 // whole sequence (plus the manager's 2 s cancel grace) stays under that.
 const (
-	httpShutdownTimeout     = 2 * time.Second // in-flight HTTP requests
-	pipelineShutdownTimeout = 4 * time.Second // a running pipeline, before it is cancelled
+	httpShutdownTimeout     = 2 * time.Second  // in-flight HTTP requests
+	pipelineShutdownTimeout = 4 * time.Second  // a running pipeline, before it is cancelled
 	wsPingInterval          = 30 * time.Second
 	readHeaderTimeout       = 10 * time.Second
 	idleTimeout             = 120 * time.Second
@@ -49,6 +51,11 @@ func main() {
 		// Fail fast: without the database no event can be accepted, and the
 		// container restart policy retries the connection.
 		log.Fatalf("[supervisor] database connection failed: %s", models.RedactPhones(err.Error()))
+	}
+
+	gormDB, err := database.OpenGORM(cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("[supervisor] gorm connection failed: %v", err)
 	}
 
 	hub := dashboard.NewHub(dashboard.Options{
@@ -78,6 +85,9 @@ func main() {
 		Incidents:    manager,
 		Origins:      policy,
 		MaxBodyBytes: cfg.SensorMaxBodyBytes,
+		GormDB:       gormDB,
+		JWTSecret:    cfg.JWTSecret,
+		RateLimitRPS: cfg.RateLimitRPS,
 		Checks: []httpapi.Check{
 			{Name: "database", Probe: db.HealthCheck},
 			{Name: "agent", Probe: ai.Health},
@@ -95,7 +105,7 @@ func main() {
 	})
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", hub.ServeWS) // the hub applies the origin policy to the upgrade
+	mux.HandleFunc("/ws", hub.ServeWS)
 	api.Register(mux)
 
 	srv := &http.Server{
@@ -105,7 +115,9 @@ func main() {
 		IdleTimeout:       idleTimeout,
 	}
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.ListenAndServe() }()
+	go func() {
+		serveErr <- srv.ListenAndServe()
+	}()
 	log.Printf("[supervisor] listening on %s", srv.Addr)
 
 	exitCode := 0
@@ -118,14 +130,14 @@ func main() {
 	}
 	stop() // a second signal terminates immediately
 
-	shutdown(srv, manager, hub, db)
+	shutdown(srv, manager, hub, db, gormDB)
 	os.Exit(exitCode)
 }
 
 // shutdown stops accepting HTTP requests, gives a running pipeline a grace
 // period (then cancels it, so its event still ends with event_complete),
 // closes every WebSocket client and finally the database.
-func shutdown(srv *http.Server, manager *pipeline.Manager, hub *dashboard.Hub, db *database.DB) {
+func shutdown(srv *http.Server, manager *pipeline.Manager, hub *dashboard.Hub, db *database.DB, gormDB *gorm.DB) {
 	httpCtx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(httpCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -139,6 +151,9 @@ func shutdown(srv *http.Server, manager *pipeline.Manager, hub *dashboard.Hub, d
 	}
 
 	hub.Close()
+	if sqlDB, err := gormDB.DB(); err == nil {
+		_ = sqlDB.Close()
+	}
 	if err := db.Close(); err != nil {
 		log.Printf("[supervisor] database close: %v", err)
 	}
@@ -161,4 +176,7 @@ func logStartup(cfg *config.Config, policy origin.Policy) {
 	}
 	log.Printf("[supervisor] AI batch size %d, CAMARA concurrency %d, agent timeout %s, pipeline timeout %s",
 		cfg.AgentBatchSize, cfg.CamaraConcurrency, cfg.AgentTimeout, cfg.PipelineTimeout)
+	if cfg.JWTSecret == "" {
+		log.Printf("[supervisor] WARNING: JWT_SECRET is not set — auth endpoints will reject all tokens")
+	}
 }
