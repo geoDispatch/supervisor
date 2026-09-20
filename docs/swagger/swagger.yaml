@@ -1,4 +1,86 @@
 basePath: /
+definitions:
+  models.DeviceLogRow:
+    properties:
+      action:
+        type: string
+      confidence:
+        type: number
+      event_id:
+        type: string
+      id:
+        type: integer
+      logged_at:
+        type: string
+      phone:
+        type: string
+      rescue_priority:
+        type: integer
+      shelter_name:
+        type: string
+      sms_message:
+        type: string
+      zone:
+        type: string
+      zone_escalated:
+        type: boolean
+    type: object
+  models.DeviceRow:
+    properties:
+      id:
+        type: integer
+      phone:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  models.EventRow:
+    properties:
+      aftershock_risk:
+        type: string
+      created_at:
+        type: string
+      disaster_type:
+        type: string
+      epicenter_lat:
+        type: number
+      epicenter_lng:
+        type: number
+      id:
+        type: string
+      radius_km:
+        type: number
+      severity:
+        type: number
+      tsunami_risk:
+        type: boolean
+    type: object
+  models.RescueFlagRow:
+    properties:
+      event_id:
+        type: string
+      flagged_at:
+        type: string
+      id:
+        type: integer
+      phone:
+        type: string
+      rescue_priority:
+        type: integer
+      zone:
+        type: string
+    type: object
+  models.ShelterRow:
+    properties:
+      address:
+        type: string
+      capacity:
+        type: integer
+      id:
+        type: integer
+      name:
+        type: string
+    type: object
 host: localhost:8080
 info:
   contact:
@@ -11,6 +93,234 @@ info:
   title: GeoDispatch Supervisor API
   version: "1.0"
 paths:
+  /api/devices:
+    get:
+      description: Returns all registered SIM/phone devices ordered by id.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.DeviceRow'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      security:
+      - BearerAuth: []
+      - APIKeyAuth: []
+      summary: List devices
+      tags:
+      - devices
+    post:
+      consumes:
+      - application/json
+      description: Registers a new SIM/phone number (E.164 format).
+      parameters:
+      - description: Device
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            phone:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.DeviceRow'
+        "400":
+          description: Bad Request
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      security:
+      - BearerAuth: []
+      - APIKeyAuth: []
+      summary: Register a device
+      tags:
+      - devices
+  /api/devices/{id}:
+    delete:
+      description: Removes a device by its integer id. Returns 204 on success.
+      parameters:
+      - description: Device ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      security:
+      - BearerAuth: []
+      - APIKeyAuth: []
+      summary: Delete a device
+      tags:
+      - devices
+    put:
+      consumes:
+      - application/json
+      description: Updates the phone number of a registered device.
+      parameters:
+      - description: Device ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Fields to update
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            phone:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.DeviceRow'
+        "400":
+          description: Bad Request
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      security:
+      - BearerAuth: []
+      - APIKeyAuth: []
+      summary: Update a device
+      tags:
+      - devices
+  /api/events:
+    get:
+      description: Returns all disaster events, newest first.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.EventRow'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      security:
+      - BearerAuth: []
+      - APIKeyAuth: []
+      summary: List events
+      tags:
+      - events
+  /api/events/{id}:
+    get:
+      description: Returns a single disaster event and all its device logs.
+      parameters:
+      - description: Event ID (from USGS/sensor source)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              event:
+                $ref: '#/definitions/models.EventRow'
+              logs:
+                items:
+                  $ref: '#/definitions/models.DeviceLogRow'
+                type: array
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      security:
+      - BearerAuth: []
+      - APIKeyAuth: []
+      summary: Get event
+      tags:
+      - events
   /api/keys:
     get:
       description: Returns all API keys in the system. key_hash is never included.
@@ -135,6 +445,58 @@ paths:
       summary: Revoke an API key
       tags:
       - keys
+  /api/rescue-flags:
+    get:
+      description: Returns all rescue flags ordered by priority descending then by
+        time flagged ascending.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.RescueFlagRow'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      security:
+      - BearerAuth: []
+      - APIKeyAuth: []
+      summary: Rescue queue
+      tags:
+      - rescue
+  /api/shelters:
+    get:
+      description: Returns all shelters ordered by id. Location (PostGIS) is not included;
+        use a GIS client for spatial queries.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.ShelterRow'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      security:
+      - BearerAuth: []
+      - APIKeyAuth: []
+      summary: List shelters
+      tags:
+      - shelters
   /auth/login:
     post:
       consumes:

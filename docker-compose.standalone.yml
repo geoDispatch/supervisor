@@ -32,9 +32,10 @@ services:
       - postgres_dev_data:/var/lib/postgresql/data
       - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
       - ./migrations/002_events.sql:/docker-entrypoint-initdb.d/002_events.sql:ro
-      - ./scripts/seed/seed_shelters.sql:/docker-entrypoint-initdb.d/003_seed_shelters.sql:ro
-      - ./scripts/seed/seed_devices.sql:/docker-entrypoint-initdb.d/004_seed_devices.sql:ro
-      - ./scripts/seed/seed_demo_areas.sql:/docker-entrypoint-initdb.d/005_seed_demo_areas.sql:ro
+      - ./migrations/003_auth.sql:/docker-entrypoint-initdb.d/003_auth.sql:ro
+      - ./scripts/seed/seed_shelters.sql:/docker-entrypoint-initdb.d/004_seed_shelters.sql:ro
+      - ./scripts/seed/seed_devices.sql:/docker-entrypoint-initdb.d/005_seed_devices.sql:ro
+      - ./scripts/seed/seed_demo_areas.sql:/docker-entrypoint-initdb.d/006_seed_demo_areas.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U geodispatch -d geodispatch"]
       interval: 5s
