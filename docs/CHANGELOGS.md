@@ -676,16 +676,131 @@
       - Added GORM shutdown handling alongside the existing PostgreSQL pool
       - Added startup diagnostics for missing JWT configuration
 
+────────────────────────────────────────────────────────────────
+  v1.3.1 => v1.4.0                                      [MINOR]
+────────────────────────────────────────────────────────────────
+  + REST API and API-key management endpoints
+      - Added protected REST resources under `/api/`
+      - Added device management endpoints:
+          GET    /api/devices
+          POST   /api/devices
+          PUT    /api/devices/{id}
+          DELETE /api/devices/{id}
+      - Added event inspection endpoints:
+          GET /api/events
+          GET /api/events/{id}
+      - Added shelter listing endpoint:
+          GET /api/shelters
+      - Added rescue queue endpoint:
+          GET /api/rescue-flags
+      - Added API-key management endpoints:
+          GET    /api/keys
+          POST   /api/keys
+          DELETE /api/keys/{id}
+
+  + Authentication flows exposed through HTTP API
+      - Added `POST /auth/register` for operator account creation
+      - Added `POST /auth/login` for JWT issuance
+      - Enforced minimum password length of eight characters
+      - Normalized registration and login email addresses
+      - Added duplicate-email conflict handling
+      - Preserved bcrypt password hashing and secure credential handling
+
+  + API-key lifecycle management
+      - Added cryptographically secure API-key generation
+      - Returned raw API keys only once during creation
+      - Persisted only bcrypt hashes of API keys
+      - Added JWT-only API-key creation
+      - Added safe API-key listing without exposing `key_hash`
+      - Added API-key revocation by UUID
+
+  + Swagger/OpenAPI documentation
+      - Added generated Swagger documentation under `docs/swagger/`:
+          docs/swagger/docs.go
+          docs/swagger/swagger.json
+          docs/swagger/swagger.yaml
+      - Added Swagger UI at:
+          GET /swagger/
+      - Documented JWT Bearer authentication and X-API-Key authentication
+      - Documented authentication, API-key, device, event, shelter, and
+        rescue endpoints
+      - Added API metadata, security definitions, request schemas, and
+        response definitions
+
+  + HTTP server integration
+      - Registered Swagger UI alongside the existing health, sensor,
+        capability, authentication, and REST routes
+      - Added protected route wiring through the existing rate-limit and
+        JWT/API-key middleware
+      - Added separate JWT-only protection for API-key creation
+
+  / Dependency and project metadata updates
+      - Added Swagger dependencies:
+          github.com/swaggo/http-swagger
+          github.com/swaggo/swag
+      - Added JWT and rate-limit dependencies to the module requirements
+      - Updated Go module version context and generated dependency checksums
+      - Added API documentation generation metadata to
+        `cmd/supervisor/main.go`
+
+────────────────────────────────────────────────────────────────
+  v1.4.0 => v1.5.0                                      [MAJOR]
+────────────────────────────────────────────────────────────────
+  + Complete REST resource API
+      - Expanded the protected API with device CRUD operations
+      - Added event listing and event-detail views with associated device
+        logs
+      - Added shelter listing backed by GORM models
+      - Added rescue-flag queue listing ordered by priority and timestamp
+      - Added validation for integer and string resource identifiers
+      - Added duplicate-device and duplicate-phone conflict handling
+
+  + REST handler organization improved
+      - Refactored `internal/httpapi/rest.go` around a dedicated
+        `restHandler`
+      - Centralized the GORM database handle for REST handlers
+      - Extracted route registration from individual handler implementations
+      - Improved separation between routing and resource operations
+      - Added consistent database error logging and JSON error responses
+
+  + Public API documentation expanded
+      - Added `docs/API_USE.md` with practical API usage documentation
+      - Documented:
+          authentication and JWT usage
+          API-key usage
+          device management
+          event inspection
+          shelter access
+          rescue queue access
+          existing sensor and WebSocket endpoints
+          HTTP error semantics
+          API rate limiting
+      - Expanded generated Swagger JSON, YAML, and Go documentation with
+        device, event, shelter, rescue, and ORM response models
+
+  + Database startup resilience
+      - Added retry-based PostgreSQL startup connection handling
+      - Added retry-based GORM startup connection handling
+      - Added up to 10 connection attempts
+      - Added three-second retry intervals
+      - Added clear startup logging for:
+          successful connection attempts
+          failed attempts
+          exhausted retries
+          shutdown before connection
+      - Prevents the supervisor from failing immediately when PostgreSQL
+        is still starting inside Compose
+
 ════════════════════════════════════════════════════════════════
                         CURRENT RELEASE
 ════════════════════════════════════════════════════════════════
 
-  BUILD STATUS:     ✅ AUTHENTICATION + API SECURITY PHASE
-  VERSION:          v1.3.0
+  BUILD STATUS:     ✅ REST API + DOCUMENTATION + STARTUP RESILIENCE
+  VERSION:          v1.5.0
   RELEASE DATE:     September 20, 2026
-  FOCUS:            JWT/API-key authentication, bcrypt credentials,
-                    rate limiting, WebSocket v2 reliability, and
-                    production-oriented runtime hardening
+  FOCUS:            Protected resource APIs, Swagger/OpenAPI documentation,
+                    API usage guidance, database startup retries, and
+                    Go 1.22 compatibility
 
 ════════════════════════════════════════════════════════════════
   Legend:  + Added          · Changed             / Fixed
